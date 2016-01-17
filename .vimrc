@@ -2,9 +2,9 @@ set nocompatible              " be iMproved, required
 set number
 
 " for solarized color scheme
-syntax enable
-set background=dark
-colorscheme solarized
+" syntax enable
+" set background=dark
+" colorscheme solarized
 
 " for airline
 set laststatus=2
@@ -22,7 +22,7 @@ let g:syntastic_check_on_wq = 0
 
 set hlsearch
 set incsearch
-set tabstop=4    "make tab to be 4 spaces
+"set tabstop=4    "make tab to be 4 spaces
 " set cscopetag
 " set cscopeprg=gtags-cscope
 filetype off                  " required
@@ -47,9 +47,9 @@ Plugin 'Valloric/YouCompleteMe'
 
 " All of your Plugins must be added before the following line
 call vundle#end()            " required
-filetype plugin indent on    " required
+"filetype plugin indent on    " required
 " To ignore plugin indent changes, instead use:
-"filetype plugin on
+filetype plugin on
 "
 " Brief help
 " :PluginList          - list configured plugins
