@@ -80,7 +80,7 @@ void restore_memory()
 	restore_memory_helper(fd);
 
 	// g. restore old register using setcontext
-	setcontext(&context_to_recover);
+	/* setcontext(&context_to_recover); */
 }
 
 void restore_memory_helper(int fd)
