@@ -15,8 +15,8 @@ typedef struct {
 	char *start;
 	char *end;
 	long len;
-	char *perm;
-	char *dump;
+	char perm[4];
+	char name[200];
 } Section;
 
 
@@ -29,7 +29,8 @@ void get_memory_range_and_permission(char *line, Section *s);
 void write_to_ckpt(const void *buffer, int context_len);
 char *trim_space(char *s);
 void process_mem_range(char *mr, Section *ms);
-int get_number_of_line(char *file);
+int get_number_of_lines(char *file);
+void write_memory_section_to_ckpt(Section *ms);
 
 __attribute__((constructor))
 void myconstructor() {
@@ -60,14 +61,7 @@ void dump_img(void) {
 	char line_buffer[1000];
 	FILE *ptr_file;
 
-	/* fd_maps = open(map_path, O_RDONLY); */
-	/* if (fd_maps < 0) { */
-	/* 	printf("Failed to open memory maps!\n"); */
-	/* 	exit(-1); */
-	/* } */
 	// ckpt header: ucontext_t
-	// section header: memory range + length + permission
-	// section image: memory dump
 	// 1. getcontext to save registers values
 	ucontext_t mycontext;
     if (getcontext(&mycontext) < 0) {
@@ -76,26 +70,41 @@ void dump_img(void) {
 	write_context_to_ckpt_header(&mycontext, sizeof mycontext);
 	
 	// 2. read /proc/self/maps to get section headers, then get memory dump
-	int num_of_lines = get_number_of_line(map_path);
-	int i = 0;
-	Section sections[num_of_lines];
+	/* int num_of_lines = get_number_of_lines(map_path); */
+	/* int i = 0; */
+	/* Section sections[num_of_lines]; */
+	Section ms;
 	ptr_file = fopen(map_path, "r");
 
 	while (fgets(line_buffer, 1000, ptr_file) != NULL) {
 		printf("%s", line_buffer);
-		get_memory_range_and_permission(line_buffer, &sections[i++]);
-		/* printf("Content in resbuffer: %s\n", resbuffer); */
-		/* if (get_memory_range_and_permission(line_buffer, resbuffer) >= 0) { */
-		/* 	write_to_ckpt(&resbuffer, sizeof resbuffer); */
-		/* } */
-			
+		// get memory section header
+		get_memory_range_and_permission(line_buffer, &ms);
+		// write memory section header and memory dump to the ckpt file
+		write_memory_section_to_ckpt(&ms);
 	}
 	fclose(ptr_file);
-
-
 }
 
-int get_number_of_line(char *file) {
+
+void write_memory_section_to_ckpt(Section *ms)
+{
+	char imgpath[] = "./myckpt";
+	int fd;
+	fd = open(imgpath, O_RDWR | O_APPEND);
+	if (fd < 0) {
+		printf("Failed to open myckpt file!\n");
+	}
+	if (write(fd, ms, sizeof(Section)) < 0) {
+		printf("Failed to write section header to myckpt!\n");
+	}
+	if (write(fd, ms->start, ms->len) < 0) {
+		printf("Failed to write memory dump to myckpt!\n");
+	}	
+	close(fd);
+}
+
+int get_number_of_lines(char *file) {
 	FILE *f;
 	int count = 0;
 	char line_buffer[1000];
@@ -120,7 +129,7 @@ void get_memory_range_and_permission(char *line, Section *s) {
 	// check if it's for 'vsyscall', if true pass
 	if (strcmp(trim_space(name), "[vsyscall]") == 0) return;
 	/* printf("I will process this line!\n"); */
-	s->perm = perm;
+	strcpy(s->perm, perm);
 	/* char *rp = res + strlen(res); // pointer to the end of the string */
 	/* strcpy(rp, mem_range); */
 	process_mem_range(mem_range, s);
@@ -146,7 +155,6 @@ void process_mem_range(char *mr, Section *ms)
 	mtcp_readhex(end, &ms->end);
 	ms->len = ms->end - ms->start;
 	printf("start addr: %p, end addr: %p\n", ms->start, ms->end);
-	memcpy(ms->dump, ms->start, ms->len);
 	/* printf("memory dump: %s\n", ms->dump); */
 
 	// read /proc/self/mem
@@ -192,13 +200,15 @@ void write_to_ckpt(const void *buffer, int context_len) {
 void write_context_to_ckpt_header(ucontext_t *context, int context_len) {
 	char imgpath[] = "./myckpt";
 	int fd;
-	fd = open(imgpath, O_RDWR | O_APPEND | O_CREAT, 0666);
+	// this is the first write to the file, if the file exists, overwrite it!
+	fd = open(imgpath, O_RDWR | O_TRUNC | O_CREAT, 0666);
 	if (fd < 0) {
 		printf("Failed to open myckpt file!\n");
 	}
 	if (write(fd, context, context_len) < 0) {
 		printf("Failed to write to myckpt!\n");
 	}
+	close(fd);
 }
 
 
