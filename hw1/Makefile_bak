@@ -6,13 +6,13 @@ clean:
 	rm -rf myckpt context_ckpt restart hello ckpt ckpt.o libckpt.a
 
 libckpt:
-	gcc -fno-stack-protector -c -o ckpt.o ckpt.c && ar rcs libckpt.a ckpt.o
+	gcc -c -o ckpt.o ckpt.c && ar rcs libckpt.a ckpt.o
 
 prog:	libckpt
-	gcc -fno-stack-protector -g -static -L`pwd` -lckpt -Wl,-u,myconstructor -o hello hello.c
+	gcc -g -static -L`pwd` -lckpt -Wl,-u,myconstructor -o hello hello.c
 
 rst:	prog
-	gcc -fno-stack-protector -g -static -Wl,-Ttext-segment=5000000 -Wl,-Tdata=5100000 -Wl,-Tbss=5200000 -o restart restart.c
+	gcc -g -static -Wl,-Ttext-segment=5000000 -Wl,-Tdata=5100000 -Wl,-Tbss=5200000 -o restart restart.c
 
 res:
 	./restart myckpt

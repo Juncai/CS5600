@@ -10,7 +10,10 @@
 #include <ucontext.h>
 #include "ckpt.h"
 
-#define BUF_SIZE 2048
+static const char CONTEXT_PATH[] = "./context_ckpt";
+static const char IMG_PATH[] = "./myckpt";
+static const char MEM_MAP[] = "/proc/self/maps";
+int from_recover = 1;
 
 __attribute__((constructor))
 void myconstructor() {
@@ -21,26 +24,17 @@ void signal_handler(int signo) {
 	if (signo == SIGUSR2) {
 		dump_img();		
 		exit(0);
+		// exit cause problem??
 	}
 }
 
 void dump_img(void) {
-	/* int fd_maps; */
-	char map_path[] = "/proc/self/maps";
+	// 2. read /proc/self/maps to get section headers, then get memory dump
+	Section ms;
 	char line_buffer[1000];
 	FILE *ptr_file;
 
-	// ckpt header: ucontext_t
-	// 1. getcontext to save registers values
-	ucontext_t mycontext;
-    if (getcontext(&mycontext) < 0) {
-		printf("Failed to get context!\n");
-	}
-	write_context_to_ckpt_header(&mycontext, sizeof mycontext);
-	
-	// 2. read /proc/self/maps to get section headers, then get memory dump
-	Section ms;
-	ptr_file = fopen(map_path, "r");
+	ptr_file = fopen(MEM_MAP, "r");
 
 	while (fgets(line_buffer, 1000, ptr_file) != NULL) {
 		/* printf("%s", line_buffer); */
@@ -50,13 +44,19 @@ void dump_img(void) {
 		write_memory_section_to_ckpt(&ms);
 	}
 	fclose(ptr_file);
+
+	// 1. getcontext to save registers values
+	ucontext_t mycontext;
+	from_recover = 0;
+    getcontext(&mycontext);
+	if (from_recover == 1) return;
+	write_context_to_ckpt_header(&mycontext, sizeof mycontext);
 }
 
 void write_memory_section_to_ckpt(Section *ms)
 {
-	char imgpath[] = "./myckpt";
 	int fd;
-	fd = open(imgpath, O_RDWR | O_APPEND);
+	fd = open(IMG_PATH, O_RDWR | O_APPEND | O_CREAT, 0666);
 	if (fd < 0) {
 		printf("Failed to open myckpt file!\n");
 	}
@@ -137,9 +137,8 @@ char *trim_space(char *s)
 }
 
 void write_to_ckpt(const void *buffer, int context_len) {
-	char imgpath[] = "./myckpt";
 	int fd;
-	fd = open(imgpath, O_RDWR | O_APPEND | O_CREAT, 0666);
+	fd = open(IMG_PATH, O_RDWR | O_APPEND | O_CREAT, 0666);
 	if (fd < 0) {
 		printf("Failed to open myckpt file!\n");
 	}
@@ -149,10 +148,9 @@ void write_to_ckpt(const void *buffer, int context_len) {
 }
 
 void write_context_to_ckpt_header(ucontext_t *context, int context_len) {
-	char imgpath[] = "./myckpt";
 	int fd;
 	// this is the first write to the file, if the file exists, overwrite it!
-	fd = open(imgpath, O_RDWR | O_TRUNC | O_CREAT, 0666);
+	fd = open(CONTEXT_PATH, O_RDWR | O_TRUNC | O_CREAT, 0666);
 	if (fd < 0) {
 		printf("Failed to open myckpt file!\n");
 	}
