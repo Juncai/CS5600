@@ -44,16 +44,15 @@ int main(int argc, char *argv[])
 
 	// 1. move stack to a infrequently used place
 	// allocate 0x5300000 - 0x5301000 with mmap (flag MAP_STACK?)
-	void *new_ss = (void*)0x5300000; // start of stack address
-	void *new_sp = (void*)0x5301000; // stack pointer
+	char *new_sp = (char*)0x5300000; // start of stack address
 	size_t new_s_len = 1000;
-	/* mmap(new_ss, new_s_len, PROT_READ | PROT_WRITE, MAP_PRIVATE, -1, 0); */
+	mmap(new_sp, new_s_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
 	// 2. declare a global variable, then copy the image file name to it
 	strcpy(ckpt_image, argv[1]);
 
 	// 3. move the stack pointer to the newly allocated address in step 1
-	/* __asm__ volatile ("mov %0,%%rsp;" : : "g" (new_sp) : "memory"); */
+	asm volatile ("mov %0,%%rsp;" : : "g" (new_sp) : "memory");
 
 	// immediately call a new function to use the newly allocated stack address
 	restore_memory();
@@ -67,7 +66,7 @@ void restore_memory()
 	// first remove previous stack space
 	// a. load /proc/self/maps and find the stack
 	// b. use munmap to clear the space
-	/* remove_current_stack(); */
+	remove_current_stack();
 
 	// d. copy register from ckpt header to some pre-allocated memory
 	int fd;
@@ -80,7 +79,7 @@ void restore_memory()
 	restore_memory_helper(fd);
 
 	// g. restore old register using setcontext
-	/* setcontext(&context_to_recover); */
+	setcontext(&context_to_recover);
 }
 
 void restore_memory_helper(int fd)
@@ -89,7 +88,7 @@ void restore_memory_helper(int fd)
 	/* char buf[100000]; */
 	while (read(fd, &s, sizeof(Section)) > 0) {
 		// first allocate memory
-		mmap(s.start, s.len, get_permission(&s), MAP_PRIVATE, -1, 0);
+		mmap(s.start, s.len, get_permission(&s), MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
 		// load memory dump from ckpt file
 		char buf[s.len];
@@ -97,7 +96,7 @@ void restore_memory_helper(int fd)
 			printf("Failed to read memory dump from ckpt file!\n");
 		}
 		// copy memory to the allocated space
-		/* memcpy(s.start, buf, s.len); */
+		memcpy(s.start, buf, s.len);
 	}
 
 }
@@ -107,17 +106,16 @@ int get_permission(Section *s)
 	int perm =  PROT_WRITE;
 	if (s->perm[0] == 'r') {
 		perm = perm | PROT_READ;
-		printf("got read\n");
+		/* printf("got read\n"); */
 	}
 	/* if (s->perm[1] == 'w') { */
 	/* 	perm = perm | PROT_WRITE; */
-	/* 	printf("got write\n"); */
+	/* 	/1* printf("got write\n"); *1/ */
 	/* } */
 	if (s->perm[2] == 'x') {
 		perm = perm | PROT_EXEC;
-		printf("got exec\n");
+		/* printf("got exec\n"); */
 	}
-	printf("got done\n");
 	return perm;
 }
 
