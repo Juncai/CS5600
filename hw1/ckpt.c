@@ -23,8 +23,10 @@ void myconstructor() {
 void signal_handler(int signo) {
 	if (signo == SIGUSR2) {
 		dump_img();		
-		exit(0);
-		// exit cause problem??
+		// if this is not from recover, exit the program
+		if (from_recover == 0) {
+			exit(0);
+		}
 	}
 }
 
