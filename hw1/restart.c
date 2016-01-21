@@ -1,3 +1,4 @@
+#include "restart.h"
 #include <ctype.h>
 #include <string.h>
 #include <sys/types.h>
@@ -9,7 +10,6 @@
 #include <ucontext.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "restart.h"
 
 char ckpt_image[1000];
 static const char CONTEXT_PATH[] = "./context_ckpt";

@@ -1,3 +1,4 @@
+#include "ckpt.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -8,7 +9,6 @@
 #include <unistd.h>
 #include <signal.h>
 #include <ucontext.h>
-#include "ckpt.h"
 
 static const char CONTEXT_PATH[] = "./context_ckpt";
 static const char IMG_PATH[] = "./myckpt";
