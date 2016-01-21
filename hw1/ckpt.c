@@ -23,15 +23,26 @@ void myconstructor() {
 void signal_handler(int signo) {
 	if (signo == SIGUSR2) {
 		dump_img();		
-		// if this is not from recover, exit the program
-		if (from_recover == 0) {
-			exit(0);
-		}
 	}
 }
 
 void dump_img(void) {
 	// 2. read /proc/self/maps to get section headers, then get memory dump
+	create_memory_checkpoint();
+
+	// 1. getcontext to save registers values
+	ucontext_t mycontext;
+	from_recover = 0;
+    getcontext(&mycontext);
+	// if this is not from recover, save the context and exit the program
+	if (from_recover == 0) {
+		write_context_to_ckpt_header(&mycontext, sizeof mycontext);
+		exit(0);
+	}
+}
+
+void create_memory_checkpoint()
+{
 	Section ms;
 	char line_buffer[1000];
 	FILE *ptr_file;
@@ -39,20 +50,12 @@ void dump_img(void) {
 	ptr_file = fopen(MEM_MAP, "r");
 
 	while (fgets(line_buffer, 1000, ptr_file) != NULL) {
-		/* printf("%s", line_buffer); */
 		// get memory section header
 		get_memory_range_and_permission(line_buffer, &ms);
 		// write memory section header and memory dump to the ckpt file
 		write_memory_section_to_ckpt(&ms);
 	}
 	fclose(ptr_file);
-
-	// 1. getcontext to save registers values
-	ucontext_t mycontext;
-	from_recover = 0;
-    getcontext(&mycontext);
-	if (from_recover == 1) return;
-	write_context_to_ckpt_header(&mycontext, sizeof mycontext);
 }
 
 void write_memory_section_to_ckpt(Section *ms)
@@ -71,18 +74,6 @@ void write_memory_section_to_ckpt(Section *ms)
 	close(fd);
 }
 
-int get_number_of_lines(char *file) {
-	FILE *f;
-	int count = 0;
-	char line_buffer[1000];
-	f = fopen(file, "r");
-	while (fgets(line_buffer, 1000, f) != NULL) {
-		count++;
-	}
-	fclose(f);
-	return count;
-}
-
 void get_memory_range_and_permission(char *line, Section *s) {
 	const char deli[2] = " ";
 	char *mem_range = strtok(line, deli);
@@ -95,13 +86,8 @@ void get_memory_range_and_permission(char *line, Section *s) {
 	if (perm[0] == '-' || perm[strlen(perm) - 1] == 's') return;
 	// check if it's for 'vsyscall', if true pass
 	if (strcmp(trim_space(name), "[vsyscall]") == 0) return;
-	/* printf("I will process this line!\n"); */
 	strcpy(s->perm, perm);
-	/* char *rp = res + strlen(res); // pointer to the end of the string */
-	/* strcpy(rp, mem_range); */
 	process_mem_range(mem_range, s);
-	/* rp = rp + strlen(mem_range); // pointer to the end of the string */
-	/* strcpy(rp, perm); */
 }
 
 void fwrite_to_ckpt (void *p, size_t size, char *fpath)
@@ -121,9 +107,6 @@ void process_mem_range(char *mr, Section *ms)
 	mtcp_readhex(start, &ms->start);
 	mtcp_readhex(end, &ms->end);
 	ms->len = ms->end - ms->start;
-	/* printf("start addr: %p, end addr: %p\n", ms->start, ms->end); */
-	/* printf("memory dump: %s\n", ms->dump); */
-	return;
 }
 
 char *trim_space(char *s)
@@ -181,7 +164,6 @@ char mtcp_readhex (char *s, char **value)
     else break;
     v = v * 16 + c;
   }
-  /* printf("I get the memory address: %lu\n", v); */
   *value = (char*)v;
   return (c);
 }

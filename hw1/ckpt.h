@@ -1,3 +1,6 @@
+#ifndef CKPT_H
+#define CKPT_H
+
 #include <ucontext.h>
 
 typedef struct {
@@ -17,5 +20,6 @@ void get_memory_range_and_permission(char *line, Section *s);
 void write_to_ckpt(const void *buffer, int context_len);
 char *trim_space(char *s);
 void process_mem_range(char *mr, Section *ms);
-int get_number_of_lines(char *file);
 void write_memory_section_to_ckpt(Section *ms);
+void create_memory_checkpoint();
+#endif
