@@ -10,10 +10,9 @@
 #include <signal.h>
 #include <ucontext.h>
 
-static const char CONTEXT_PATH[] = "./context_ckpt";
 static const char IMG_PATH[] = "./myckpt";
 static const char MEM_MAP[] = "/proc/self/maps";
-int from_recover = 1;
+int from_recover = 0;
 
 __attribute__((constructor))
 void myconstructor() {
@@ -27,16 +26,18 @@ void signal_handler(int signo) {
 }
 
 void dump_img(void) {
-	// 2. read /proc/self/maps to get section headers, then get memory dump
-	create_memory_checkpoint();
 
-	// 1. getcontext to save registers values
+	// get the current context
 	ucontext_t mycontext;
-	from_recover = 0;
     getcontext(&mycontext);
-	// if this is not from recover, save the context and exit the program
+
+	// if this is not from recover, save the memory dump and exit the program
 	if (from_recover == 0) {
+		from_recover = 1; // set the flag for recover
+		// 1. store context to save registers values
 		write_context_to_ckpt_header(&mycontext, sizeof mycontext);
+		// 2. read /proc/self/maps to get section headers, then get memory dump
+		create_memory_checkpoint();
 		exit(0);
 	}
 }
@@ -61,7 +62,7 @@ void create_memory_checkpoint()
 void write_memory_section_to_ckpt(Section *ms)
 {
 	int fd;
-	fd = open(IMG_PATH, O_RDWR | O_APPEND | O_CREAT, 0666);
+	fd = open(IMG_PATH, O_RDWR | O_APPEND);
 	if (fd < 0) {
 		printf("Failed to open myckpt file!\n");
 	}
@@ -135,7 +136,7 @@ void write_to_ckpt(const void *buffer, int context_len) {
 void write_context_to_ckpt_header(ucontext_t *context, int context_len) {
 	int fd;
 	// this is the first write to the file, if the file exists, overwrite it!
-	fd = open(CONTEXT_PATH, O_RDWR | O_TRUNC | O_CREAT, 0666);
+	fd = open(IMG_PATH, O_RDWR | O_TRUNC | O_CREAT, 0666);
 	if (fd < 0) {
 		printf("Failed to open myckpt file!\n");
 	}
