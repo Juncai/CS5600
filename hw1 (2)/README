@@ -1,0 +1,41 @@
+This is a README for CS5600 hw1
+
+Author: Jun Cai
+Email: cai.jun@husky.neu.edu
+
+Contents of the submission:
+
+	- ckpt.h
+	- ckpt.c
+	- restart.h
+	- restart.c
+	- hello.c
+	- Makefile
+	- README
+
+Building the code:
+
+	- compiling and creating the static library 'libckpt.a'
+		gcc -c -o ckpt.o ckpt.c && ar rcs libckpt.a ckpt.o
+	- compiling the restart program
+		gcc -g -static -Wl,-Ttext-segment=5000000 -Wl,-Tdata=5100000 -Wl,-Tbss=5200000 -o restart restart.c
+	- link the library to the target program (i.e. 'hello.c')
+		gcc -g -static -L`pwd` -lckpt -Wl,-u,myconstructor -o hello hello.c
+
+Running/testing the code:
+	
+	- Start the target program (i.e. 'hello')
+		./hello
+	- Send SIGUSR2 signal to terminate the target program, this will triger the creation of checkpoint image (resides at './myckpt') for later use
+		kill -12 `pgrep -n hello`
+	- Resume the target program using the checkpoint image created on previous step
+		./restart myckpt
+
+Automation with Makefile:
+	
+	- to clean the environment
+		make clean
+	- to compile the code (including target progem)
+		make rst
+	- to clean, build and test the code
+		make [check]
