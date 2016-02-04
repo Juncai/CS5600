@@ -3,7 +3,7 @@ all:	check
 default: check
 	
 clean:
-	rm -rf myckpt context_ckpt restart hello ckpt ckpt.o libckpt.a
+	rm -rf myckpt restart hello ckpt.o libckpt.a
 
 libckpt:
 	gcc -c -o ckpt.o ckpt.c && ar rcs libckpt.a ckpt.o

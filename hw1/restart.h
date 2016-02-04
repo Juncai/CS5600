@@ -12,8 +12,8 @@ typedef struct {
 } Section;
 
 void restore_memory();
-void get_context_from_header(ucontext_t *c);
-void restore_memory_helper();
+void get_context_from_header(ucontext_t *c, int fd);
+void restore_memory_helper(int fd);
 int get_permission(Section *s);
 void read_context(int fd, ucontext_t *c);
 void remove_current_stack();

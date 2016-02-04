@@ -12,7 +12,6 @@
 #include <stdlib.h>
 
 char ckpt_image[1000];
-static const char CONTEXT_PATH[] = "./context_ckpt";
 
 int main(int argc, char *argv[])
 {
@@ -47,30 +46,31 @@ void restore_memory()
 	// b. use munmap to clear the space
 	remove_current_stack();
 
+	// read checkpoint image
+	int fd;
+	fd = open(ckpt_image, O_RDONLY);
+
 	// d. copy register from ckpt header to some pre-allocated memory
 	ucontext_t context_to_recover;
-	get_context_from_header(&context_to_recover);
+	get_context_from_header(&context_to_recover, fd);
 
 	// e. use mmap to allocate memory address from section header
 	// f. copy memory dump to it
-	restore_memory_helper();
+	restore_memory_helper(fd);
+
+	close(fd);
 
 	// g. restore old register using setcontext
 	setcontext(&context_to_recover);
 }
 
-void get_context_from_header(ucontext_t *c)
+void get_context_from_header(ucontext_t *c, int fd)
 {
-	int fd;
-	fd = open(CONTEXT_PATH, O_RDONLY);
 	read(fd, c, sizeof(ucontext_t));
-	close(fd);
 }
 
-void restore_memory_helper()
+void restore_memory_helper(int fd)
 {
-	int fd;
-	fd = open(ckpt_image, O_RDONLY);
 	Section s;
 
 	while (read(fd, &s, sizeof(Section)) > 0) {
@@ -85,7 +85,6 @@ void restore_memory_helper()
 		// copy memory to the allocated space
 		memcpy(s.start, buf, s.len);
 	}
-	close(fd);
 }
 
 int get_permission(Section *s)
