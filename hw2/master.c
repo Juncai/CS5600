@@ -10,6 +10,7 @@
 #include <sys/poll.h>
 #include <sys/epoll.h>
 
+#define MAXEVEDNTS 1000
 void computeExponential(char *worker_path, char *mechanism, int x, int n);
 
 int main(int argc, char *argv[])
@@ -24,12 +25,6 @@ int main(int argc, char *argv[])
 	int x = atoi(argv[6]);
 	int n = atoi(argv[8]);
 
-	/* char *worker_path = "./worker"; */
-	/* char *mechanism = "sequential"; */
-	/* int x = 2; */
-	/* int n = 3; */
-
-
 	computeExponential(worker_path, mechanism, x, n);
 	return 0;
 }
@@ -40,14 +35,12 @@ void computeExponential(char *worker_path, char *mechanism, int x, int n)
 	int status = 0;
 	char x_str[50];
 	char n_str[50];
-	/* printf("n: %d\n", n); */
 	int cid = -1;
 	char i_str[50];
 	char w_str[50];
 	int pipefds[2];
 	char buf;
 	int exec_res;
-	/* char *argv[] = {"./worker", "-x", x_str, "-n", i_str}; */
 	char *argv[6];
 
 	sprintf(x_str, "%d", x);
@@ -137,21 +130,18 @@ void computeExponential(char *worker_path, char *mechanism, int x, int n)
 			tv.tv_usec = 500000;
 			retval = select(max_fd + 1, &rfds, NULL, NULL, &tv);
 
-			/* printf("retval is %d\n", retval); */
 			if (retval == -1) {
 				perror("select");
 				return;
 			} else if (retval) {
 				for (i = 0; i <= n; i++) {
 					if (FD_ISSET(read_ends[i], &rfds)) {
-						/* close(write_ends[i]); */
 						sprintf(w_str, "worker %d: ", i);
 						write(STDOUT_FILENO, w_str, strlen(w_str));
 						while (read(read_ends[i], &buf, 1) > 0)
 						    write(STDOUT_FILENO, &buf, 1);
 						close(read_ends[i]);
 						read_ends[i] = 0;
-						/* FD_CLR(read_ends[i], &rfds); */
 						counter--;
 					}
 				}
@@ -199,16 +189,7 @@ void computeExponential(char *worker_path, char *mechanism, int x, int n)
 
 		// wait for half a second
 		while (counter > 0) {
-		/* while (1) { */
-			// reset the rfds
-			/* for (i = 0; i <= n; i++) { */
-			/* 	if (read_ends[i] != 0) { */
-			/* 		FD_SET(read_ends[i], &rfds); */
-			/* 	} */
-			/* } */
 			retval = poll(pfds, n + 1, timeout);
-
-			/* printf("retval is %d\n", retval); */
 
 			if (retval == -1) {
 				perror("poll");
@@ -216,7 +197,6 @@ void computeExponential(char *worker_path, char *mechanism, int x, int n)
 			} else if (retval) {
 				for (i = 0; i <= n; i++) {
 					if (pfds[i].revents & POLLIN) {
-						/* close(write_ends[i]); */
 						sprintf(w_str, "worker %d: ", i);
 						write(STDOUT_FILENO, w_str, strlen(w_str));
 						while (read(read_ends[i], &buf, 1) > 0)
@@ -232,32 +212,44 @@ void computeExponential(char *worker_path, char *mechanism, int x, int n)
 
 	if (strcmp(mechanism, "epoll") == 0) {
 		// create a list of pipe read-ends
-		struct epoll_event ev, events[n + 1];
+		struct epoll_event ev, events[MAXEVEDNTS];
 		int epollfd;
+		int read_end, write_end;
 		int read_ends[n + 1];
 		int write_ends[n + 1];
 		int max_fd = 0;
-		int timeout = 500;  // in milisecond
+		int retval;
+		int counter = n + 1;
 		
-		epollfd = epoll_creat(n + 1);
+		// create epoll instance
+		epollfd = epoll_create1(0);
 		if (epollfd == -1) {
 			perror("epoll");
 			exit(EXIT_FAILURE);
 		}
 
-		ev.events = EPOLLIN;
-
 		for (i = 0; i <= n; i++) {
 			pipe(pipefds);
-			pfds[i].fd = pipefds[0];
-			pfds[i].events = POLLIN;
-			read_ends[i] = pipefds[0];
-			write_ends[i] = pipefds[1];
+			read_end = pipefds[0];
+			write_end = pipefds[1];
+			// add event to epoll
+			ev.data.fd = read_end;
+			ev.events = EPOLLIN | EPOLLET;
+			retval = epoll_ctl(epollfd, EPOLL_CTL_ADD, read_end, &ev);
+			if (retval == -1) {
+				perror ("epoll_ctl");
+				exit(EXIT_FAILURE);
+			}
+			// store the read and write end fds
+			read_ends[i] = read_end;
+			write_ends[i] = write_end;
+
 			if (pipefds[0] > max_fd) {
 				max_fd = pipefds[0];
 			}
 		}
 
+		// create threads for executing worker program
 		for (i = 0; i <= n; i++) {
 			printf("read_ends: %d\n", read_ends[i]);
 			
@@ -274,41 +266,25 @@ void computeExponential(char *worker_path, char *mechanism, int x, int n)
 			}
 		}
 
-		int retval;
-		int counter = n + 1;
-
 		// wait for half a second
 		while (counter > 0) {
-		/* while (1) { */
-			// reset the rfds
-			/* for (i = 0; i <= n; i++) { */
-			/* 	if (read_ends[i] != 0) { */
-			/* 		FD_SET(read_ends[i], &rfds); */
-			/* 	} */
-			/* } */
-			retval = poll(pfds, n + 1, timeout);
-
-			/* printf("retval is %d\n", retval); */
-
-			if (retval == -1) {
-				perror("poll");
-				return;
-			} else if (retval) {
-				for (i = 0; i <= n; i++) {
-					if (pfds[i].revents & POLLIN) {
-						/* close(write_ends[i]); */
+			int n_eve, i_eve;
+			n_eve = epoll_wait(epollfd, events, MAXEVEDNTS, -1);
+			for (i_eve = 0; i_eve < n_eve; i_eve++) {
+				read_end = events[i_eve].data.fd;
+				for (i = 0; i < n + 1; i++) {
+					if (read_ends[i] == read_end) {
 						sprintf(w_str, "worker %d: ", i);
 						write(STDOUT_FILENO, w_str, strlen(w_str));
-						while (read(read_ends[i], &buf, 1) > 0)
-						    write(STDOUT_FILENO, &buf, 1);
-						close(read_ends[i]);
-						read_ends[i] = 0;
-						counter--;
 					}
 				}
+				while (read(read_end, &buf, 1) > 0)
+					write(STDOUT_FILENO, &buf, 1);
+				close(read_end);
+				read_ends[i] = 0;
+				counter--;
 			}
 		}
 	}
-
 	return;
 }
