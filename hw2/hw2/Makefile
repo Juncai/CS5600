@@ -13,20 +13,20 @@ master:
 
 compile: clean worker master
 
-test_worker:
-	./worker -x 2 -n 3
+test_worker: compile
+	./worker -x 2 -n 10
 
-test_sequential:
-	./master --worker_path ./worker --wait_mechanism sequential -x 2 -n 3
+test_sequential: compile
+	./master --worker_path ./worker --wait_mechanism sequential -x 2 -n 10
 
-test_select:
-	./master --worker_path ./worker --wait_mechanism select -x 2 -n 3
+test_select: compile
+	./master --worker_path ./worker --wait_mechanism select -x 2 -n 10
 
-test_poll:
-	./master --worker_path ./worker --wait_mechanism poll -x 2 -n 3
+test_poll: compile
+	./master --worker_path ./worker --wait_mechanism poll -x 2 -n 10
 
-test_epoll:
-	./master --worker_path ./worker --wait_mechanism epoll -x 2 -n 12
+test_epoll: compile
+	./master --worker_path ./worker --wait_mechanism epoll -x 2 -n 10
 
 gdb:
 	gdb --args ./restart myckpt

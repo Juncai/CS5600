@@ -96,8 +96,6 @@ void computeExponential(char *worker_path, char *mechanism, int x, int n)
 		}
 
 		for (i = 0; i <= n; i++) {
-			printf("read_ends: %d\n", read_ends[i]);
-			
 			sprintf(i_str, "%d", i);
 			cid = fork();
 			if (cid == 0) {
@@ -169,8 +167,6 @@ void computeExponential(char *worker_path, char *mechanism, int x, int n)
 		}
 
 		for (i = 0; i <= n; i++) {
-			printf("read_ends: %d\n", read_ends[i]);
-			
 			sprintf(i_str, "%d", i);
 			cid = fork();
 			if (cid == 0) {
