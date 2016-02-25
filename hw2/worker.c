@@ -20,7 +20,7 @@ int main(int argc, char *argv[])
 
 	double res;
 	res = compute(x, n);
-	printf("%d^%d / n: %f\n", x, n, res);
+	printf("%d^%d / %d! : %f\n", x, n, n, res);
 
 	return 0;
 }
