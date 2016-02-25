@@ -1,0 +1,10 @@
+Building the code:
+	make compile
+
+Run the worker:
+	./worker -x X -n N
+
+Run the master:
+	./master --worker_path ./worker --wait_mechanism MECHANISM -x X -n N
+	where MECHANISM is one of {sequential, select, poll, epoll}.
+
