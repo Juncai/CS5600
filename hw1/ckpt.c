@@ -1,4 +1,6 @@
 #include "ckpt.h"
+#define _GNU_SOURCE
+#include <syscall.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -40,6 +42,9 @@ void dump_img(void) {
 		create_memory_checkpoint();
 		exit(0);
 	}
+	printf("PID from syscall: %d\n", syscall(SYS_getpid));
+	printf("PID from getpid: %d\n", getpid());
+	
 }
 
 void create_memory_checkpoint()

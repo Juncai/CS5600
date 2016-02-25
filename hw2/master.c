@@ -96,8 +96,6 @@ void computeExponential(char *worker_path, char *mechanism, int x, int n)
 		}
 
 		for (i = 0; i <= n; i++) {
-			printf("read_ends: %d\n", read_ends[i]);
-			
 			sprintf(i_str, "%d", i);
 			cid = fork();
 			if (cid == 0) {
@@ -169,8 +167,6 @@ void computeExponential(char *worker_path, char *mechanism, int x, int n)
 		}
 
 		for (i = 0; i <= n; i++) {
-			printf("read_ends: %d\n", read_ends[i]);
-			
 			sprintf(i_str, "%d", i);
 			cid = fork();
 			if (cid == 0) {
@@ -264,23 +260,27 @@ void computeExponential(char *worker_path, char *mechanism, int x, int n)
 			}
 		}
 
-		// wait for half a second
 		while (counter > 0) {
+			int valid_fd = 0;
 			int n_eve, i_eve;
 			n_eve = epoll_wait(epollfd, events, MAXEVEDNTS, -1);
+			if (n_eve == 0) break;
 			for (i_eve = 0; i_eve < n_eve; i_eve++) {
 				read_end = events[i_eve].data.fd;
 				for (i = 0; i < n + 1; i++) {
 					if (read_ends[i] == read_end) {
 						sprintf(w_str, "worker %d: ", i);
 						write(STDOUT_FILENO, w_str, strlen(w_str));
+						valid_fd = 1;
+						read_ends[i] = -1;
+						counter--;
 					}
 				}
-				while (read(read_end, &buf, 1) > 0)
-					write(STDOUT_FILENO, &buf, 1);
+				if (valid_fd) {
+					while (read(read_end, &buf, 1) > 0)
+						write(STDOUT_FILENO, &buf, 1);
+				}
 				close(read_end);
-				read_ends[i] = 0;
-				counter--;
 			}
 		}
 	}
