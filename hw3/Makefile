@@ -23,5 +23,5 @@ check:	libmalloc.so test1
 dist:
 	dir=`basename $$PWD`; cd ..; tar cvf $$dir.tar ./$$dir; gzip $$dir.tar
 
-mytest:
-	gcc -g -o m.o malloc_test.c
+mymalloc:
+	gcc -g -o m.o mymalloc.c
