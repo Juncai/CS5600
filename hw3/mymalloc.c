@@ -5,6 +5,14 @@
 #include <sys/mman.h>
 #include <string.h>
 #include <pthread.h>
+#include <math.h>
+
+#define MIN_SIZE 32
+#define MAX_SIZE 4096
+#define PAGES_REQUESTED 4
+#define NUM_OF_BINS 8
+
+static int BIN_SIZES[NUM_OF_BINS] = {32, 64, 128, 256, 512, 1024, 2048, 4096};
 
 typedef struct MallocHeader
 {
@@ -12,16 +20,26 @@ typedef struct MallocHeader
 	struct MallocHeader *next;
 } MallocHeader;
 
-__thread MallocHeader *free8 = NULL;
-__thread MallocHeader *free64 = NULL;
-__thread MallocHeader *free512 = NULL;
-pthread_mutex_t mutexSbrk; 
+__thread MallocHeader *freeLists[NUM_OF_BINS];
+__thread MallocHeader *usedLists[NUM_OF_BINS];
+__thread MallocHeader *freeListBig;
+__thread MallocHeader *usedListBig;
+__thread int mallocCount = 0;
+__thread int freeCount = 0;
+pthread_mutex_t sbrkMutex; 
 
 
 void *mymalloc(size_t size);
 void myfree(void *ptr);
-void enqueue(MallocHeader *newHead, MallocHeader *oldHead);
 void *getFree(MallocHeader *freeHead);
+int getFLIndex(size_t s);
+void *getSpace(size_t s);
+int requestFromHeap();
+void flEnqueue(int qInd, MallocHeader *newHead);
+MallocHeader *flDequeue(int qInd);
+void ulEnqueue(int qInd, MallocHeader *newHead);
+void ulDequeue(int qInd, MallocHeader *hdrToRemove);
+void transferSpace(int sInd, int dInd);
 
 int main() {
 	long pageSize = sysconf(_SC_PAGESIZE);
@@ -50,90 +68,173 @@ int main() {
 
 void *mymalloc(size_t size)
 {
+	mallocCount++;
 	void *sPtr = NULL;
-	// TODO: Validate size.
-	if (size > 512) {
-		size_t allocSize = size + sizeof(MallocHeader);
-		/* sPtr = mmap(NULL, allocSize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0); */
-		sPtr = mmap(NULL, allocSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	size_t realSize = size + sizeof(MallocHeader);
+	if (realSize > MAX_SIZE) {	// if the requested space is larger than 512, use 'mmap' to get the space
+		sPtr = mmap(NULL, realSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 		assert(sPtr != MAP_FAILED);
 		MallocHeader *hdr = (MallocHeader*) sPtr;
-		hdr->size = size;
+		hdr->size = realSize;
 		printf("%s:%d malloc(%zu): Allocated %zu bytes at %p\n",
-			 __FILE__, __LINE__, size, allocSize, sPtr);
-
-		return sPtr + sizeof(MallocHeader);
-
-	} else {
-		size_t realSize = 8;
-		if (size <= 8) {
-			realSize = 8;
-			sPtr = free8;
-			if (free8 != NULL) free8 = free8->next;
-		} else if (size <= 64) {
-			realSize = 64;
-			sPtr = free64;
-			if (free64 != NULL) free64 = free64->next;
-		} else if (size <= 512) {
-			realSize = 512;
-			sPtr = free512;
-			if (free512 != NULL) free512 = free512->next;
-		}
-
-		if (sPtr == NULL) {
-			// TODO memory request with size equal page size
-			size_t pageSize = sysconf(_SC_PAGESIZE);
-			size_t allocSize = realSize + sizeof(MallocHeader);
-
-			sPtr = sbrk((intptr_t)allocSize);
-
-			MallocHeader *hdr = (MallocHeader*) sPtr;
-			hdr->size = realSize;
-		}
+			 __FILE__, __LINE__, size, realSize, sPtr);
+	} else {	// handle small memory requests
+		if (realSize <= MIN_SIZE) {
+			realSize = MIN_SIZE;
+		} 
+		sPtr = getSpace(realSize);
+		
 		printf("%s:%d malloc(%zu): Allocated %zu bytes at %p\n",
-			 __FILE__, __LINE__, size, realSize + sizeof(MallocHeader), sPtr);
-
-		return sPtr + sizeof(MallocHeader);
+			 __FILE__, __LINE__, size, ((MallocHeader*)sPtr)->size, sPtr);
 	}
+	return sPtr + sizeof(MallocHeader);
+}
+
+void *getSpace(size_t s)
+{
+	int flIndex = getFLIndex(s);
+	int i;
+	MallocHeader *hdr;
+	for (i = flIndex; i < NUM_OF_BINS; i++) {
+		transferSpace(i, flIndex);
+		hdr = flDequeue(flIndex);
+		if (hdr != NULL) {
+			ulEnqueue(flIndex, hdr);
+			break;
+		}
+	}
+	return hdr;
+}
+
+void transferSpace(int sInd, int dInd) 
+{
+	if (freeLists[sInd] == NULL) return;
+	if (dInd == sInd) return;
+
+	size_t newSize = BIN_SIZES[sInd - 1];
+	MallocHeader *hdr0 = flDequeue(sInd);
+	MallocHeader *hdr1 = hdr0 + newSize;
+	hdr0->size = newSize;
+	hdr1->size = newSize;
+	flEnqueue(sInd - 1, hdr0);
+	flEnqueue(sInd - 1, hdr1);
+	transferSpace(sInd - 1, dInd);
+}
+
+int requestFromHeap()
+{
+	// TODO memory request with size equal page size
+	// Assume that, the page size will be 4k or multiple of 4k
+	size_t pageSize = sysconf(_SC_PAGESIZE);
+	size_t requestSize = pageSize * PAGES_REQUESTED;
+	int numOfMaxSize = requestSize / MAX_SIZE;
+	
+	void *sPtr = sbrk((intptr_t)requestSize);
+	if (sPtr == (void *)-1) return 1;
+
+	MallocHeader *hdr = (MallocHeader*)sPtr;
+	int i;
+	for (i = 0; i < numOfMaxSize; i++) {
+		hdr->size = MAX_SIZE;
+		flEnqueue(NUM_OF_BINS - 1, hdr);
+		hdr += MAX_SIZE;
+	}
+
+	return 0;
+}
+
+int getFLIndex(size_t s)
+{
+	int i;
+	for (i = 0; i < 8; i++) {
+		if ((int)s <= BIN_SIZES[i]) {
+			return i;
+		}
+	}
+	return -1;
 }
 
 void myfree(void *ptr)
 {
+	freeCount++;
 	MallocHeader *hdr = ptr - sizeof(MallocHeader);
-	size_t realSize = hdr->size + sizeof(MallocHeader);
+	
+	size_t realSize = hdr->size;
 	// TODO add the address to the free list of the thread
-	if (hdr->size == 8) {
-		hdr->next = free8;
-		free8 = hdr;
-	} else if (hdr->size == 64) {
-		hdr->next = free8;
-		free8 = hdr;
-	} else if (hdr->size == 512) {
-		hdr->next = free8;
-		free8 = hdr;
-	} else if (hdr->size > 512) {
+	if (realSize > MAX_SIZE) {
+		ulDequeue(-1, hdr);
 		munmap((void *)hdr, realSize);
+	} else {
+
 	}
 
 	printf("%s:%d free(%p): Freeing %zu bytes from %p\n",
 		 __FILE__, __LINE__, ptr, realSize, hdr);
 }
 
-/* void *getFree(MallocHeader *freeHead) */
-/* { */
-/* 	MallocHeader *res = freeHead; */
-/* 	if (freeHead != NULL) { */
-/* 		freeHead = freeHead->next; */
-/* 	} */
-/* 	return res; */
-/* } */
+void flEnqueue(int qInd, MallocHeader *newHead)
+{
+	if (qInd == -1) { // for big space
+		newHead->next = freeListBig;
+		freeListBig = newHead;
+	} else {
+		newHead->next = freeLists[qInd];
+		freeLists[qInd] = newHead;
+	}
+}
 
-/* void enqueue(MallocHeader *newHead, MallocHeader *oldHead) */
-/* { */
-/* 	newHead->next = oldHead; */
-/* 	oldHead = newHead; */
-/* } */
+MallocHeader *flDequeue(int qInd)
+{
+	MallocHeader *res;
+	if (qInd == -1) { // for big space
+		res = freeListBig;
+		if (res != NULL) {
+			freeListBig = res->next;
+		}
+	} else {
+		res = freeLists[qInd];
+		if (res != NULL) {
+			freeLists[qInd] = res->next;
+		}
+	}
+	return res;
+}
 
+void ulEnqueue(int qInd, MallocHeader *newHead)
+{
+	if (qInd == -1) { // for big space
+		newHead->next = usedListBig;
+		usedListBig = newHead;
+	} else {
+		newHead->next = usedLists[qInd];
+		usedLists[qInd] = newHead;
+	}
+}
+
+void ulDequeue(int qInd, MallocHeader *hdrToRemove)
+{
+	MallocHeader *h;
+	if (qInd == -1) { // for big space
+		h = usedListBig;
+		if (h == hdrToRemove) {
+			usedListBig = hdrToRemove->next;
+			return;
+		}
+	} else {
+		h = usedLists[qInd];
+		if (h == hdrToRemove) {
+			usedLists[qInd] = hdrToRemove->next;
+			return;
+		}
+	}
+
+	while (h != NULL) {
+		if (h->next == hdrToRemove) {
+			h->next = hdrToRemove->next;
+			break;
+		}
+	}
+}
 /* void *realloc(void *ptr, size_t size) */
 /* { */
 /*   // Allocate new memory (if needed) and copy the bits from old location to new. */
