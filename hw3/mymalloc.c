@@ -22,7 +22,7 @@ typedef struct MallocHeader
 
 __thread MallocHeader *freeLists[NUM_OF_BINS];
 __thread MallocHeader *usedLists[NUM_OF_BINS];
-__thread MallocHeader *freeListBig;
+/* __thread MallocHeader *freeListBig; */
 __thread MallocHeader *usedListBig;
 __thread int mallocCount = 0;
 __thread int freeCount = 0;
@@ -32,14 +32,18 @@ pthread_mutex_t sbrkMutex;
 void *mymalloc(size_t size);
 void myfree(void *ptr);
 void *getFree(MallocHeader *freeHead);
-int getFLIndex(size_t s);
+int getBinIndex(size_t s);
 void *getSpace(size_t s);
 int requestFromHeap();
 void flEnqueue(int qInd, MallocHeader *newHead);
 MallocHeader *flDequeue(int qInd);
 void ulEnqueue(int qInd, MallocHeader *newHead);
-void ulDequeue(int qInd, MallocHeader *hdrToRemove);
+int ulDequeue(int qInd, MallocHeader *hdrToRemove);
 void transferSpace(int sInd, int dInd);
+int isInQueue(int qInd, MallocHeader *hdr);
+void myfreeHelper(int qInd, MallocHeader *tar);
+int removeFromFL(int qInd, MallocHeader *tar);
+MallocHeader *getBuddyAddr(MallocHeader *hdr);
 
 int main() {
 	long pageSize = sysconf(_SC_PAGESIZE);
@@ -71,11 +75,12 @@ void *mymalloc(size_t size)
 	mallocCount++;
 	void *sPtr = NULL;
 	size_t realSize = size + sizeof(MallocHeader);
-	if (realSize > MAX_SIZE) {	// if the requested space is larger than 512, use 'mmap' to get the space
+	if (realSize > MAX_SIZE) {	// for large space
 		sPtr = mmap(NULL, realSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 		assert(sPtr != MAP_FAILED);
 		MallocHeader *hdr = (MallocHeader*) sPtr;
 		hdr->size = realSize;
+		ulEnqueue(-1, hdr);
 		printf("%s:%d malloc(%zu): Allocated %zu bytes at %p\n",
 			 __FILE__, __LINE__, size, realSize, sPtr);
 	} else {	// handle small memory requests
@@ -92,7 +97,7 @@ void *mymalloc(size_t size)
 
 void *getSpace(size_t s)
 {
-	int flIndex = getFLIndex(s);
+	int flIndex = getBinIndex(s);
 	int i;
 	MallocHeader *hdr;
 	for (i = flIndex; i < NUM_OF_BINS; i++) {
@@ -143,7 +148,7 @@ int requestFromHeap()
 	return 0;
 }
 
-int getFLIndex(size_t s)
+int getBinIndex(size_t s)
 {
 	int i;
 	for (i = 0; i < 8; i++) {
@@ -160,42 +165,78 @@ void myfree(void *ptr)
 	MallocHeader *hdr = ptr - sizeof(MallocHeader);
 	
 	size_t realSize = hdr->size;
+	int binInd;
 	// TODO add the address to the free list of the thread
 	if (realSize > MAX_SIZE) {
 		ulDequeue(-1, hdr);
 		munmap((void *)hdr, realSize);
 	} else {
-
+		binInd = getBinIndex(realSize);
+		ulDequeue(binInd, hdr);
+		myfreeHelper(binInd, hdr);
 	}
 
 	printf("%s:%d free(%p): Freeing %zu bytes from %p\n",
 		 __FILE__, __LINE__, ptr, realSize, hdr);
 }
 
+void myfreeHelper(int qInd, MallocHeader *tar)
+{
+	if (qInd == NUM_OF_BINS - 1) {
+		flEnqueue(qInd, tar);
+		return;
+	}
+
+	MallocHeader *buddy = getBuddyAddr(tar);
+	int ret = removeFromFL(qInd, buddy);
+	if (ret != 0) {
+		flEnqueue(qInd, tar);
+		return;
+	} else {	// if coalesce is possible
+		MallocHeader *first;
+		if (tar > buddy) {
+			first = buddy;
+		} else {
+			first = tar;
+		}
+		first->size = BIN_SIZES[qInd + 1];
+		myfreeHelper(qInd + 1, first);
+	}
+}
+
+MallocHeader *getBuddyAddr(MallocHeader *hdr)
+{
+	size_t s = hdr->size;
+	return (MallocHeader *)((long)hdr ^ (int)s);
+}
+
+int removeFromFL(int qInd, MallocHeader *tar)
+{
+	MallocHeader *h = freeLists[qInd];
+	if (h == tar) {
+		freeLists[qInd] = tar->next;
+		return 0;
+	}
+	while (h != NULL) {
+		if (h->next == tar) {
+			h->next = tar->next;
+			return 0;
+		}
+	}
+	return 1;
+}
+
 void flEnqueue(int qInd, MallocHeader *newHead)
 {
-	if (qInd == -1) { // for big space
-		newHead->next = freeListBig;
-		freeListBig = newHead;
-	} else {
-		newHead->next = freeLists[qInd];
-		freeLists[qInd] = newHead;
-	}
+	newHead->next = freeLists[qInd];
+	freeLists[qInd] = newHead;
 }
 
 MallocHeader *flDequeue(int qInd)
 {
-	MallocHeader *res;
-	if (qInd == -1) { // for big space
-		res = freeListBig;
-		if (res != NULL) {
-			freeListBig = res->next;
-		}
-	} else {
-		res = freeLists[qInd];
-		if (res != NULL) {
-			freeLists[qInd] = res->next;
-		}
+	MallocHeader *res = freeLists[qInd];
+	if (res != NULL) {
+		freeLists[qInd] = res->next;
 	}
 	return res;
 }
@@ -211,29 +252,30 @@ void ulEnqueue(int qInd, MallocHeader *newHead)
 	}
 }
 
-void ulDequeue(int qInd, MallocHeader *hdrToRemove)
+int ulDequeue(int qInd, MallocHeader *hdrToRemove)
 {
 	MallocHeader *h;
 	if (qInd == -1) { // for big space
 		h = usedListBig;
 		if (h == hdrToRemove) {
 			usedListBig = hdrToRemove->next;
-			return;
+			return 0;
 		}
 	} else {
 		h = usedLists[qInd];
 		if (h == hdrToRemove) {
 			usedLists[qInd] = hdrToRemove->next;
-			return;
+			return 0;
 		}
 	}
 
 	while (h != NULL) {
 		if (h->next == hdrToRemove) {
 			h->next = hdrToRemove->next;
-			break;
+			return 0;
 		}
 	}
+	return 1;
 }
 /* void *realloc(void *ptr, size_t size) */
 /* { */
