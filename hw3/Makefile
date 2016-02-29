@@ -24,4 +24,4 @@ dist:
 	dir=`basename $$PWD`; cd ..; tar cvf $$dir.tar ./$$dir; gzip $$dir.tar
 
 mymalloc:
-	gcc -g -o m.o mymalloc.c
+	gcc mymalloc.c -g -o m.o -lm
