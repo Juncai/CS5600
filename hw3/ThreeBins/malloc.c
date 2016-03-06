@@ -40,10 +40,6 @@ void printInfo(ArenaInfo *ai);
 void reclaimResources();
 
 
-/* void *calloc(size_t nmemb, size_t size) */
-/* { */
-/*   return NULL; */
-/* } */
 void initArenaInfo() 
 {
 	ArenaInfo *p = infoHead;
@@ -160,12 +156,14 @@ void free(void *ptr)
 	// reclaim the resources from other thread if it's a new process
 	reclaimResources();
 
+	if (ptr == NULL) return;
+
 	MallocHeader *hdr = ptr - sizeof(MallocHeader);
 	
 	size_t realSize = hdr->size;
 	size_t size = realSize - sizeof(MallocHeader);
 	int binInd = sizeToBinNo(size);
-	// TODO add the address to the free list of the thread
+
 	if (size > MAX_SIZE) {
 		ulDequeue(-1, hdr);
 		munmap((void *)hdr, realSize);
@@ -271,6 +269,7 @@ void reclaimResources()
 
 	ArenaInfo *p = infoHead;
 	MallocHeader *hdr;
+	MallocHeader *next;
 	int i;
 	while (p != NULL) {
 		if (p != &info) {
@@ -278,26 +277,66 @@ void reclaimResources()
 			for (i = 0; i < p->numOfBins; i++) {
 				hdr = p->freeLists[i];
 				while (hdr != NULL) {
+					next = hdr->next;
 					flEnqueue(i, hdr);
+					hdr = next;
 				}
 				hdr = p->usedLists[i];
 				while (hdr != NULL) {
+					next = hdr->next;
 					flEnqueue(i, hdr);
+					hdr = next;
 				}
 				info.sizesOfFL[i] += p->sizesOfFL[i];
 				info.sizesOfUL[i] += p->sizesOfUL[i];
 				info.totalBlocks[i] += p->totalBlocks[i];
 			}
-			// TODO reclaim big memory block
-			// TODO summing the total resources allocated
+			// reclaim big memory block
+			hdr = p->usedListBig;
+			while (hdr != NULL) {
+				next = hdr->next;
+				munmap((void *)hdr, hdr->size);
+				hdr = next;
+			}
+				
+			// summing the total resources allocated
+			info.sbrkSpace += p->sbrkSpace;
 		}
+		p = p->next;
 	}
+	// set the new head to the ArenaInfo of current thread
+	infoHead = &info;
+	info.pid = cPid;
+	info.next = NULL;
 }
 			
-/* void *realloc(void *ptr, size_t size) */
-/* { */
-/*   // Allocate new memory (if needed) and copy the bits from old location to new. */
+void *realloc(void *ptr, size_t size)
+{
+	// Allocate new memory (if needed) and copy the bits from old location to new.
+	// If the original block is large enough, return it.
+    MallocHeader *hdr = ptr - sizeof(MallocHeader);
+    size_t actualSize = hdr->size - sizeof(MallocHeader);
+    if (size < actualSize) {
+		return ptr;
+    }
 
-/*   return NULL; */
-/* } */
+	// Allocate new space
+	void *newPtr = malloc(size);
+	memcpy(newPtr, ptr, actualSize);
+	
+    return newPtr;
+}
+
+void *calloc(size_t nmemb, size_t size)
+{
+	if (nmemb == 0 || size == 0) {
+		return NULL;
+	}
+
+	// allocate space for multiple items
+	size_t totalSize = size * nmemb;
+	void *p = malloc(totalSize);
+	memset(p, 0, totalSize);
+	return p;
+}
 
