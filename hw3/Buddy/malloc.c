@@ -10,109 +10,127 @@
 #include <math.h>
 #include <errno.h>
 
-static size_t BIN_SIZES[NUM_OF_BINS] = {32, 64, 128, 256, 512, 1024, 2048, 4096};
+#ifndef TEST
+#define TEST 0
+#endif
 
-__thread MallocHeader *freeLists[NUM_OF_BINS];
-__thread MallocHeader *usedLists[NUM_OF_BINS];
-/* __thread MallocHeader *freeListBig; */
-__thread MallocHeader *usedListBig;
-__thread int mallocCount = 0;
-__thread int freeCount = 0;
+
+static const size_t MIN_SIZE = 8;
+static const size_t MAX_SIZE = 512;
+static const int PAGES_REQUESTED = 4;
+static struct ArenaInfo *infoHead;
+static size_t BIN_SIZES[NUM_OF_BINS] = {8, 64, 512};
+
+__thread ArenaInfo info;
+/* __thread MallocHeader *freeLists[NUM_OF_BINS]; */
+/* __thread MallocHeader *usedLists[NUM_OF_BINS]; */
+/* __thread MallocHeader *usedListBig; */
+/* __thread int mallocCount = 0; */
+/* __thread int freeCount = 0; */
 pthread_mutex_t sbrkMutex; 
 
 
+int sizeToBinNo(size_t s);
 void *getFree(MallocHeader *freeHead);
-int getBinIndex(size_t s);
-void *getSpace(size_t s);
-int requestSpaceFromHeap();
+void *getSpace(int b);
+int requestSpaceFromHeap(int b);
 void flEnqueue(int qInd, MallocHeader *newHead);
 MallocHeader *flDequeue(int qInd);
 void ulEnqueue(int qInd, MallocHeader *newHead);
 int ulDequeue(int qInd, MallocHeader *hdrToRemove);
-void transferSpace(int sInd, int dInd);
 int isInQueue(int qInd, MallocHeader *hdr);
-void myfreeHelper(int qInd, MallocHeader *tar);
-int removeFromFL(int qInd, MallocHeader *tar);
-MallocHeader *getBuddyAddr(MallocHeader *hdr);
+void initArenaInfo();
+void printInfo(ArenaInfo *ai);
+void reclaimResources();
 
 
-/* void *calloc(size_t nmemb, size_t size) */
-/* { */
-/*   return NULL; */
-/* } */
+void initArenaInfo() 
+{
+	ArenaInfo *p = infoHead;
+	info.next = NULL;
+	if (p == NULL) {
+		infoHead = &info;
+	} else {
+		while (p->next != NULL) {
+			p = p->next;
+		}
+		p->next = &info;
+	}
+	info.pid = getpid();
+	info.tid = pthread_self();
+	info.numOfBins = NUM_OF_BINS;
+	info.init = 1;
+}
 
 void *malloc(size_t size)
 {
-	mallocCount++;
+	// add arena info for the current thread to the process info queue
+	if (info.init == 0) {
+		initArenaInfo();
+	}
+
+	// reclaim the resources from other thread if it's a new process
+	reclaimResources();
 	void *sPtr = NULL;
 	size_t realSize = size + sizeof(MallocHeader);
-	if (realSize > MAX_SIZE) {	// for large space
+	if (size > MAX_SIZE) {	// for large space
 		sPtr = mmap(NULL, realSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 		assert(sPtr != MAP_FAILED);
 		MallocHeader *hdr = (MallocHeader*) sPtr;
 		hdr->size = realSize;
 		ulEnqueue(-1, hdr);
+		info.mmapSpace += realSize;
+#if TEST > 0
 		printf("%s:%d malloc(%zu): Allocated %zu bytes at %p\n",
 			 __FILE__, __LINE__, size, realSize, sPtr);
+#endif
 	} else {	// handle small memory requests
-		if (realSize <= MIN_SIZE) {
-			realSize = MIN_SIZE;
-		} 
-		sPtr = getSpace(realSize);
+		int binNo = sizeToBinNo(size);
+		sPtr = getSpace(binNo);
 		
+		info.mallocCount[binNo]++;
+#if TEST > 0
 		printf("%s:%d malloc(%zu): Allocated %zu bytes at %p\n",
 			 __FILE__, __LINE__, size, ((MallocHeader*)sPtr)->size, sPtr);
+#endif
 	}
 	return sPtr + sizeof(MallocHeader);
 }
 
-void *getSpace(size_t s)
+int sizeToBinNo(size_t s)
 {
-	int binIndex = getBinIndex(s);
 	int i;
-	MallocHeader *hdr;
-	for (i = binIndex; i < NUM_OF_BINS; i++) {
-		transferSpace(i, binIndex);
-		hdr = flDequeue(binIndex);
-		if (hdr != NULL) {
-			ulEnqueue(binIndex, hdr);
-			break;
+	for (i = 0; i < NUM_OF_BINS; i++) {
+		if (s <= BIN_SIZES[i]) {
+			return i;
 		}
+	}
+	return -1;
+}
+
+void *getSpace(int b)
+{
+	MallocHeader *hdr = flDequeue(b);
+	if (hdr == NULL) {
+		requestSpaceFromHeap(b);
+		hdr = flDequeue(b);
+	}
+	if (hdr != NULL) {
+		ulEnqueue(b, hdr);
+		info.sizesOfFL[b]--;
+		info.sizesOfUL[b]++;
 	}
 	return hdr;
 }
 
-void transferSpace(int sInd, int dInd) 
-{
-	if (freeLists[sInd] == NULL) {
-
-		if (sInd == NUM_OF_BINS - 1) {
-			requestSpaceFromHeap();
-		} else {
-			return;
-		}
-	} 
-
-	if (dInd == sInd) return;
-
-	size_t newSize = BIN_SIZES[sInd - 1];
-	MallocHeader *hdr0 = flDequeue(sInd);
-	MallocHeader *hdr1 = hdr0 + newSize / 16;
-	hdr0->size = newSize;
-	hdr1->size = newSize;
-	printf("Two %zu BYTE slots created.\n", newSize);
-	flEnqueue(sInd - 1, hdr0);
-	flEnqueue(sInd - 1, hdr1);
-	transferSpace(sInd - 1, dInd);
-}
-
-int requestSpaceFromHeap()
+int requestSpaceFromHeap(int b)
 {
 	// memory request with size equal page size
 	// Assume that, the page size will be 4k or multiple of 4k
 	size_t pageSize = sysconf(_SC_PAGESIZE);
 	size_t requestSize = pageSize * PAGES_REQUESTED;
-	int numOfMaxSize = requestSize / MAX_SIZE;
+	size_t nodeSize = BIN_SIZES[b] + sizeof(MallocHeader);
+	int numOfNewNodes = requestSize / nodeSize;
 	
 	// need to acquire the mutex before sbrk
 	int ret = pthread_mutex_lock(&sbrkMutex);
@@ -128,107 +146,69 @@ int requestSpaceFromHeap()
 
 	MallocHeader *hdr = (MallocHeader*)sPtr;
 	int i;
-	for (i = 0; i < numOfMaxSize; i++) {
-		hdr->size = MAX_SIZE;
-		flEnqueue(NUM_OF_BINS - 1, hdr);
-		hdr += MAX_SIZE / 16;
+	for (i = 0; i < numOfNewNodes; i++) {
+		hdr->size = nodeSize;
+		flEnqueue(b, hdr);
+		/* hdr += nodeSize; */
+		hdr += nodeSize / 16;
 	}
-	printf("%d free slots of %d BYTE are created!\n", numOfMaxSize, MAX_SIZE);
+	info.sbrkSpace += requestSize;
+	info.sizesOfFL[b] += numOfNewNodes;
+	info.totalBlocks[b] += numOfNewNodes;
+#if TEST > 0
+	printf("%d free slots of %zu BYTE are created!\n", numOfNewNodes, nodeSize);
+#endif
 
 	return 0;
 }
 
-int getBinIndex(size_t s)
-{
-	int i;
-	for (i = 0; i < 8; i++) {
-		if (s <= BIN_SIZES[i]) {
-			return i;
-		}
-	}
-	return -1;
-}
-
 void free(void *ptr)
 {
-	freeCount++;
+	// add arena info for the current thread to the process info queue
+	if (info.init == 0) {
+		initArenaInfo();
+	}
+
+	// reclaim the resources from other thread if it's a new process
+	reclaimResources();
+
+	if (ptr == NULL) return;
+
 	MallocHeader *hdr = ptr - sizeof(MallocHeader);
 	
 	size_t realSize = hdr->size;
-	int binInd;
-	// TODO add the address to the free list of the thread
-	if (realSize > MAX_SIZE) {
+	size_t size = realSize - sizeof(MallocHeader);
+	int binInd = sizeToBinNo(size);
+
+	if (size > MAX_SIZE) {
 		ulDequeue(-1, hdr);
 		munmap((void *)hdr, realSize);
+		info.mmapSpace -= realSize;
 	} else {
-		binInd = getBinIndex(realSize);
 		ulDequeue(binInd, hdr);
-		myfreeHelper(binInd, hdr);
+		flEnqueue(binInd, hdr);
+		info.freeCount[binInd]++;
+		info.sizesOfUL[binInd]--;
+		info.sizesOfFL[binInd]++;
 	}
 
+#if TEST > 0
 	printf("%s:%d free(%p): Freeing %zu bytes from %p\n",
 		 __FILE__, __LINE__, ptr, realSize, hdr);
-}
-
-void myfreeHelper(int qInd, MallocHeader *tar)
-{
-	if (qInd == NUM_OF_BINS - 1) {
-		flEnqueue(qInd, tar);
-		return;
-	}
-
-	MallocHeader *buddy = getBuddyAddr(tar);
-	int ret = removeFromFL(qInd, buddy);
-	if (ret != 0) {
-		flEnqueue(qInd, tar);
-		return;
-	} else {	// if coalesce is possible
-		MallocHeader *first;
-		if (tar > buddy) {
-			first = buddy;
-		} else {
-			first = tar;
-		}
-		first->size = BIN_SIZES[qInd + 1];
-		printf("A %zu BYTE free slot is created.\n", BIN_SIZES[qInd + 1]);
-		myfreeHelper(qInd + 1, first);
-	}
-}
-
-MallocHeader *getBuddyAddr(MallocHeader *hdr)
-{
-	size_t s = hdr->size;
-	return (MallocHeader *)((long)hdr ^ (int)s);
-}
-
-int removeFromFL(int qInd, MallocHeader *tar)
-{
-	MallocHeader *h = freeLists[qInd];
-	if (h == tar) {
-		freeLists[qInd] = tar->next;
-		return 0;
-	}
-	while (h != NULL) {
-		if (h->next == tar) {
-			h->next = tar->next;
-			return 0;
-		}
-		h = h->next;
-	}
-	return 1;
+#endif
 }
 
 void flEnqueue(int qInd, MallocHeader *newHead)
 {
-	newHead->next = freeLists[qInd];
-	freeLists[qInd] = newHead;
+	newHead->next = info.freeLists[qInd];
+	info.freeLists[qInd] = newHead;
 }
 
 MallocHeader *flDequeue(int qInd)
 {
-	MallocHeader *res = freeLists[qInd];
+	MallocHeader *res = info.freeLists[qInd];
 	if (res != NULL) {
-		freeLists[qInd] = res->next;
+		info.freeLists[qInd] = res->next;
 	}
 	return res;
 }
@@ -236,11 +216,11 @@ MallocHeader *flDequeue(int qInd)
 void ulEnqueue(int qInd, MallocHeader *newHead)
 {
 	if (qInd == -1) { // for big space
-		newHead->next = usedListBig;
-		usedListBig = newHead;
+		newHead->next = info.usedListBig;
+		info.usedListBig = newHead;
 	} else {
-		newHead->next = usedLists[qInd];
-		usedLists[qInd] = newHead;
+		newHead->next = info.usedLists[qInd];
+		info.usedLists[qInd] = newHead;
 	}
 }
 
@@ -248,15 +228,15 @@ int ulDequeue(int qInd, MallocHeader *hdrToRemove)
 {
 	MallocHeader *h;
 	if (qInd == -1) { // for big space
-		h = usedListBig;
+		h = info.usedListBig;
 		if (h == hdrToRemove) {
-			usedListBig = hdrToRemove->next;
+			info.usedListBig = hdrToRemove->next;
 			return 0;
 		}
 	} else {
-		h = usedLists[qInd];
+		h = info.usedLists[qInd];
 		if (h == hdrToRemove) {
-			usedLists[qInd] = hdrToRemove->next;
+			info.usedLists[qInd] = hdrToRemove->next;
 			return 0;
 		}
 	}
@@ -269,10 +249,117 @@ int ulDequeue(int qInd, MallocHeader *hdrToRemove)
 	}
 	return 1;
 }
-/* void *realloc(void *ptr, size_t size) */
-/* { */
-/*   // Allocate new memory (if needed) and copy the bits from old location to new. */
+void malloc_stats()
+{
+	ArenaInfo *p = infoHead;
+	int ind = 0;
+	while (p != NULL) {
+		printf("Arena %d:\n", ind++);
+		printInfo(p);
+		printf("##########################################\n");
+		p = p->next;
+	}
+}
 
-/*   return NULL; */
-/* } */
+void printInfo(ArenaInfo *ai)
+{
+	printf("PID: %d\n", ai->pid);
+	printf("TID: %zu\n", ai->tid);
+	printf("Space allocated with 'sbrk': %zu\n", ai->sbrkSpace);
+	printf("Space allocated with 'mmap': %zu\n", ai->mmapSpace);
+	printf("Total number of bins:        %d\n", ai->numOfBins);
+	int i;
+	for (i = 0; i < ai->numOfBins; i++) {
+		printf("------------------------------------------\n");
+		printf("Bin %d with %zu-byte block size: \n", i, BIN_SIZES[i]);
+		printf("Total number of blocks:      %zu\n", ai->totalBlocks[i]);
+		printf("Used blocks:                 %zu\n", ai->sizesOfUL[i]);
+		printf("Free blocks:                 %zu\n", ai->sizesOfFL[i]);
+		printf("Total allocation requests:   %zu\n", ai->mallocCount[i]);
+		printf("Total free requests:         %zu\n", ai->freeCount[i]);
+	}
+}
+
+void reclaimResources()
+{
+	pid_t cPid = getpid();
+	if (cPid == infoHead->pid) {
+		return;
+	}
+
+	ArenaInfo *p = infoHead;
+	MallocHeader *hdr;
+	MallocHeader *next;
+	int i;
+	while (p != NULL) {
+		if (p != &info) {
+			// reclaim memory in BINs
+			for (i = 0; i < p->numOfBins; i++) {
+				hdr = p->freeLists[i];
+				while (hdr != NULL) {
+					next = hdr->next;
+					flEnqueue(i, hdr);
+					hdr = next;
+				}
+				hdr = p->usedLists[i];
+				while (hdr != NULL) {
+					next = hdr->next;
+					flEnqueue(i, hdr);
+					hdr = next;
+				}
+				info.sizesOfFL[i] += p->sizesOfFL[i];
+				info.sizesOfFL[i] += p->sizesOfUL[i];
+				info.totalBlocks[i] += p->totalBlocks[i];
+			}
+			// reclaim big memory block
+			hdr = p->usedListBig;
+			while (hdr != NULL) {
+				next = hdr->next;
+				munmap((void *)hdr, hdr->size);
+				hdr = next;
+			}
+				
+			// summing the total resources allocated
+			info.sbrkSpace += p->sbrkSpace;
+		}
+		p = p->next;
+	}
+	// set the new head to the ArenaInfo of current thread
+	infoHead = &info;
+	info.pid = cPid;
+	info.next = NULL;
+}
+			
+void *realloc(void *ptr, size_t size)
+{
+	// Allocate new memory (if needed) and copy the bits from old location to new.
+	if (ptr == NULL) {
+		return malloc(size);
+	}
+	// If the original block is large enough, return it.
+    MallocHeader *hdr = ptr - sizeof(MallocHeader);
+    size_t actualSize = hdr->size - sizeof(MallocHeader);
+    if (size < actualSize) {
+		return ptr;
+    }
+
+	// Allocate new space
+	void *newPtr = malloc(size);
+	memcpy(newPtr, ptr, actualSize);
+	
+    return newPtr;
+}
+
+void *calloc(size_t nmemb, size_t size)
+{
+	if (nmemb == 0 || size == 0) {
+		return NULL;
+	}
+
+	// allocate space for multiple items
+	size_t totalSize = size * nmemb;
+	void *p = malloc(totalSize);
+	memset(p, 0, totalSize);
+	return p;
+}
 

@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <malloc.h>
 
 int main()
 {
@@ -16,7 +15,6 @@ int main()
 	int flIndex = (int)ceil(log(d) / log(2));
 	printf("index = %d\n", flIndex);
 	printf("%s\n", str);
-	malloc_stats();
 	free(str);
 	int *aa[2];
 	int i1 = 1;

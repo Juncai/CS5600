@@ -10,6 +10,10 @@
 #include <math.h>
 #include <errno.h>
 
+#ifndef TEST
+#define TEST 1
+#endif
+
 
 static const size_t MIN_SIZE = 8;
 static const size_t MAX_SIZE = 512;
@@ -53,19 +57,20 @@ void initArenaInfo()
 		p->next = &info;
 	}
 	info.pid = getpid();
+	info.tid = pthread_self();
 	info.numOfBins = NUM_OF_BINS;
 	info.init = 1;
 }
 
 void *malloc(size_t size)
 {
-	// reclaim the resources from other thread if it's a new process
-	reclaimResources();
 	// add arena info for the current thread to the process info queue
 	if (info.init == 0) {
 		initArenaInfo();
 	}
 
+	// reclaim the resources from other thread if it's a new process
+	reclaimResources();
 	void *sPtr = NULL;
 	size_t realSize = size + sizeof(MallocHeader);
 	if (size > MAX_SIZE) {	// for large space
@@ -75,15 +80,19 @@ void *malloc(size_t size)
 		hdr->size = realSize;
 		ulEnqueue(-1, hdr);
 		info.mmapSpace += realSize;
+#if TEST > 0
 		printf("%s:%d malloc(%zu): Allocated %zu bytes at %p\n",
 			 __FILE__, __LINE__, size, realSize, sPtr);
+#endif
 	} else {	// handle small memory requests
 		int binNo = sizeToBinNo(size);
 		sPtr = getSpace(binNo);
 		
 		info.mallocCount[binNo]++;
+#if TEST > 0
 		printf("%s:%d malloc(%zu): Allocated %zu bytes at %p\n",
 			 __FILE__, __LINE__, size, ((MallocHeader*)sPtr)->size, sPtr);
+#endif
 	}
 	return sPtr + sizeof(MallocHeader);
 }
@@ -146,13 +155,20 @@ int requestSpaceFromHeap(int b)
 	info.sbrkSpace += requestSize;
 	info.sizesOfFL[b] += numOfNewNodes;
 	info.totalBlocks[b] += numOfNewNodes;
+#if TEST > 0
 	printf("%d free slots of %zu BYTE are created!\n", numOfNewNodes, nodeSize);
+#endif
 
 	return 0;
 }
 
 void free(void *ptr)
 {
+	// add arena info for the current thread to the process info queue
+	if (info.init == 0) {
+		initArenaInfo();
+	}
+
 	// reclaim the resources from other thread if it's a new process
 	reclaimResources();
 
@@ -176,8 +192,10 @@ void free(void *ptr)
 		info.sizesOfFL[binInd]++;
 	}
 
+#if TEST > 0
 	printf("%s:%d free(%p): Freeing %zu bytes from %p\n",
 		 __FILE__, __LINE__, ptr, realSize, hdr);
+#endif
 }
 
 void flEnqueue(int qInd, MallocHeader *newHead)
@@ -245,6 +263,8 @@ void malloc_stats()
 
 void printInfo(ArenaInfo *ai)
 {
+	printf("PID: %d\n", ai->pid);
+	printf("TID: %zu\n", ai->tid);
 	printf("Space allocated with 'sbrk': %zu\n", ai->sbrkSpace);
 	printf("Space allocated with 'mmap': %zu\n", ai->mmapSpace);
 	printf("Total number of bins:        %d\n", ai->numOfBins);
@@ -288,7 +308,7 @@ void reclaimResources()
 					hdr = next;
 				}
 				info.sizesOfFL[i] += p->sizesOfFL[i];
-				info.sizesOfUL[i] += p->sizesOfUL[i];
+				info.sizesOfFL[i] += p->sizesOfUL[i];
 				info.totalBlocks[i] += p->totalBlocks[i];
 			}
 			// reclaim big memory block
@@ -313,6 +333,9 @@ void reclaimResources()
 void *realloc(void *ptr, size_t size)
 {
 	// Allocate new memory (if needed) and copy the bits from old location to new.
+	if (ptr == NULL) {
+		return malloc(size);
+	}
 	// If the original block is large enough, return it.
     MallocHeader *hdr = ptr - sizeof(MallocHeader);
     size_t actualSize = hdr->size - sizeof(MallocHeader);

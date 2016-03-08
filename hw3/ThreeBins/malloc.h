@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <pthread.h>
 #include <sys/types.h>
 
 #define NUM_OF_BINS 3
@@ -25,6 +26,7 @@ typedef struct ArenaInfo
 	struct ArenaInfo *next;
 	int init;
 	pid_t pid;
+	pthread_t tid;
 } ArenaInfo;
 
 
