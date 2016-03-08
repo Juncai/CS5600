@@ -22,12 +22,8 @@ static struct ArenaInfo *infoHead;
 static size_t BIN_SIZES[NUM_OF_BINS] = {8, 64, 512};
 
 __thread ArenaInfo info;
-/* __thread MallocHeader *freeLists[NUM_OF_BINS]; */
-/* __thread MallocHeader *usedLists[NUM_OF_BINS]; */
-/* __thread MallocHeader *usedListBig; */
-/* __thread int mallocCount = 0; */
-/* __thread int freeCount = 0; */
 pthread_mutex_t sbrkMutex; 
+pthread_mutex_t infoMutex; 
 
 
 int sizeToBinNo(size_t s);
@@ -46,20 +42,30 @@ void reclaimResources();
 
 void initArenaInfo() 
 {
+	// need to acquire the mutex before modify the process's info head
+	int ret = pthread_mutex_lock(&infoMutex);
+	if (ret == EINVAL) {
+		pthread_mutex_init(&infoMutex, NULL);
+		pthread_mutex_lock(&infoMutex);
+	}
+
 	ArenaInfo *p = infoHead;
 	info.next = NULL;
 	if (p == NULL) {
 		infoHead = &info;
 	} else {
 		while (p->next != NULL) {
+		/* while (p->next != 0) { */
 			p = p->next;
 		}
 		p->next = &info;
 	}
+
 	info.pid = getpid();
-	info.tid = pthread_self();
+	info.tid = pthread_self();	// for test
 	info.numOfBins = NUM_OF_BINS;
 	info.init = 1;
+	pthread_mutex_unlock(&infoMutex);
 }
 
 void *malloc(size_t size)
@@ -75,7 +81,8 @@ void *malloc(size_t size)
 	size_t realSize = size + sizeof(MallocHeader);
 	if (size > MAX_SIZE) {	// for large space
 		sPtr = mmap(NULL, realSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		assert(sPtr != MAP_FAILED);
+		// handle MAP_FAILED
+		if (sPtr == MAP_FAILED) return NULL;
 		MallocHeader *hdr = (MallocHeader*) sPtr;
 		hdr->size = realSize;
 		ulEnqueue(-1, hdr);
@@ -86,9 +93,10 @@ void *malloc(size_t size)
 #endif
 	} else {	// handle small memory requests
 		int binNo = sizeToBinNo(size);
-		sPtr = getSpace(binNo);
-		
 		info.mallocCount[binNo]++;
+		sPtr = getSpace(binNo);
+		if (sPtr == NULL) return NULL;
+		
 #if TEST > 0
 		printf("%s:%d malloc(%zu): Allocated %zu bytes at %p\n",
 			 __FILE__, __LINE__, size, ((MallocHeader*)sPtr)->size, sPtr);
@@ -111,8 +119,12 @@ int sizeToBinNo(size_t s)
 void *getSpace(int b)
 {
 	MallocHeader *hdr = flDequeue(b);
+	int ret = 0;
 	if (hdr == NULL) {
-		requestSpaceFromHeap(b);
+		ret = requestSpaceFromHeap(b);
+		if (ret) {
+			return NULL;
+		}
 		hdr = flDequeue(b);
 	}
 	if (hdr != NULL) {
@@ -142,7 +154,11 @@ int requestSpaceFromHeap(int b)
 	// release the mutex
 	pthread_mutex_unlock(&sbrkMutex);
 
-	if (sPtr == (void *)-1) return 1;
+	// handle sbrk failure
+	if (sPtr == (void *)-1) {
+		errno = ENOMEM;
+		return 1;
+	}
 
 	MallocHeader *hdr = (MallocHeader*)sPtr;
 	int i;
@@ -246,6 +262,7 @@ int ulDequeue(int qInd, MallocHeader *hdrToRemove)
 			h->next = hdrToRemove->next;
 			return 0;
 		}
+		h = h->next;
 	}
 	return 1;
 }
@@ -282,6 +299,13 @@ void printInfo(ArenaInfo *ai)
 
 void reclaimResources()
 {
+	// need to acquire the mutex before modify the process's info head
+	int ret = pthread_mutex_lock(&infoMutex);
+	if (ret == EINVAL) {
+		pthread_mutex_init(&infoMutex, NULL);
+		pthread_mutex_lock(&infoMutex);
+	}
+
 	pid_t cPid = getpid();
 	if (cPid == infoHead->pid) {
 		return;
@@ -328,6 +352,7 @@ void reclaimResources()
 	infoHead = &info;
 	info.pid = cPid;
 	info.next = NULL;
+	pthread_mutex_unlock(&infoMutex);
 }
 			
 void *realloc(void *ptr, size_t size)
