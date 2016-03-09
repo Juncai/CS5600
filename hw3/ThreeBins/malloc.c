@@ -10,6 +10,7 @@
 #include <time.h>
 #include <math.h>
 #include <errno.h>
+#include <signal.h>
 
 #ifndef TEST
 #define TEST 1
@@ -39,8 +40,9 @@ int ulDequeue(int qInd, MallocHeader *hdrToRemove);
 int isInQueue(int qInd, MallocHeader *hdr);
 void initArenaInfo();
 void printInfo(ArenaInfo *ai);
-int reclaimResources();
+int reclaimResources(int b);
 void reclaimResourcesHelper(ArenaInfo *src, ArenaInfo *dest);
+int isInfoAlive(ArenaInfo *ai);
 
 static void prepare()
 {
@@ -169,9 +171,6 @@ void *malloc(size_t size)
 		initArenaInfo();
 	}
 
-	// reclaim the resources from other thread if it's a new process
-	reclaimResources();
-
 	void *sPtr = NULL;
 	size_t realSize = size + sizeof(MallocHeader);
 	if (size > MAX_SIZE) {	// for large space
@@ -214,14 +213,21 @@ int sizeToBinNo(size_t s)
 void *getSpace(int b)
 {
 	MallocHeader *hdr = flDequeue(b);
-	int ret = 0;
 	if (hdr == NULL) {
-		ret = requestSpaceFromHeap(b);
+		// first try to reclaim resources from the exited threads/parent process
+		// TODO stop reclaim when required block found
+		reclaimResources(b);
+		hdr = flDequeue(b);
+	}
+
+	if (hdr == NULL) {
+		int ret = requestSpaceFromHeap(b);
 		if (ret) {
 			return NULL;
 		}
 		hdr = flDequeue(b);
 	}
+
 	if (hdr != NULL) {
 		ulEnqueue(b, hdr);
 		info->sizesOfFL[b]--;
@@ -281,9 +287,6 @@ void free(void *ptr)
 		initArenaInfo();
 	}
 
-	// reclaim the resources from other thread if it's a new process
-	reclaimResources();
-	
 	if (ptr == NULL) return;
 
 	MallocHeader *hdr = ptr - sizeof(MallocHeader);
@@ -403,35 +406,56 @@ void printInfo(ArenaInfo *ai)
 	}
 }
 
-int reclaimResources()
+int reclaimResources(int b)
 {
-	// need to acquire the mutex before modify the process's info head
-	pthread_mutex_lock(infoListLock);
-	pid_t cPid = getpid();
-	// TODO check pid/tid of each entry in the list, reclaim resource if possible
-	if (infoHead == NULL || cPid == infoHead->pid) {
-		pthread_mutex_unlock(infoListLock);
-		return 1;
-	}
-
-	// the infoLock is sure to be unlock since the infoListLock is unlock
-	// so no other thread is access the infoLock of the current thread
-	ArenaInfo *p = infoHead;
-	/* MallocHeader *hdr; */
-	/* MallocHeader *next; */
-	while (p != NULL) {
-		if (p != info) {
-			// reclaim resources from that thread
-			reclaimResourcesHelper(p, info);
-		}
-		p = p->next;
-	}
-	// set the new head to the ArenaInfo of current thread
+	// TODO set the new head to the ArenaInfo of current thread
+	// TODO remove infoLock
 	info->pid = cPid;
 	info->tid = pthread_self();
 	info->next = NULL;
+
+	// need to acquire the mutex before modify the process's info head
+	pthread_mutex_lock(infoListLock);
+	pid_t cPid = getpid();
+	ArenaInfo *p = infoHead;
+	ArenaInfo *next;
+	// find the new infoHead
+	/* while (p != NULL && !isInfoAlive(p)) { */
+	while (!isInfoAlive(p)) {
+		infoHead = p->next;
+		reclaimResourcesHelper(p, info);
+		if (info->freeLists[b] != NULL) {
+			pthread_mutex_unlock(infoListLock);
+			return 0;
+		}
+		p = infoHead;
+	}
+	infoHead = p;
+			
+	while (p->next != NULL) {
+		next = p->next;
+		if (!isInfoAlive(next)) {
+			p->next = next->next;
+			reclaimResourcesHelper(next, info);
+			if (info->freeLists[b] != NULL) {
+				pthread_mutex_unlock(infoListLock);
+				return 0;
+			}
+		}
+		p = p->next;
+	}
+
 	pthread_mutex_unlock(infoListLock);
-	return 0;
+	return 1;
+}
+
+int isInfoAlive(ArenaInfo *ai)
+{
+	pid_t cPid = getpid();
+	if (ai->pid != cPid) return 0;
+	int ret = pthread_kill(ai->tid, 0);
+	if (ret == ESRCH) return 0;
+	return 1;
 }
 
 
@@ -482,9 +506,6 @@ void *realloc(void *ptr, size_t size)
 		initArenaInfo();
 	}
 
-	// reclaim the resources from other thread if it's a new process
-	reclaimResources();
-
 	// Allocate new memory (if needed) and copy the bits from old location to new.
 	if (ptr == NULL) {
 		return malloc(size);
@@ -512,9 +533,6 @@ void *calloc(size_t nmemb, size_t size)
 	if (info == NULL) {
 		initArenaInfo();
 	}
-
-	// reclaim the resources from other thread if it's a new process
-	reclaimResources();
 
 	if (nmemb == 0 || size == 0) {
 		return NULL;
