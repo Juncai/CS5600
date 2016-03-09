@@ -13,7 +13,7 @@
 #include <signal.h>
 
 #ifndef TEST
-#define TEST 1
+#define TEST 0
 #endif
 
 
@@ -33,7 +33,7 @@ int sizeToBinNo(size_t s);
 void *getFree(MallocHeader *freeHead);
 void *getSpace(int b);
 int requestSpaceFromHeap(int b);
-void flEnqueue(ArenaInfo *ai, int qInd, MallocHeader *newHead);
+void flEnqueue(int qInd, MallocHeader *newHead);
 MallocHeader *flDequeue(int qInd);
 void ulEnqueue(int qInd, MallocHeader *newHead);
 int ulDequeue(int qInd, MallocHeader *hdrToRemove);
@@ -41,7 +41,7 @@ int isInQueue(int qInd, MallocHeader *hdr);
 void initArenaInfo();
 void printInfo(ArenaInfo *ai);
 int reclaimResources(int b);
-void reclaimResourcesHelper(ArenaInfo *src, ArenaInfo *dest);
+void reclaimResourcesHelper(ArenaInfo *src);
 int isInfoAlive(ArenaInfo *ai);
 
 static void prepare()
@@ -77,41 +77,41 @@ static void init()
 	pthread_atfork(&prepare, &parent, &child);
 }
 
-static void cleanup_handler(void *arg)
-{
-	// 1. remove the entry from the thread's ArenoInfo list
-	// 2. if there is any other threads in the process, 
-	//    give all the resources to the first one on the list.
+/* static void cleanup_handler(void *arg) */
+/* { */
+/* 	// 1. remove the entry from the thread's ArenoInfo list */
+/* 	// 2. if there is any other threads in the process, */ 
+/* 	//    give all the resources to the first one on the list. */
 	
-	// acquire info mutex 
-	pthread_mutex_lock(infoListLock);
-	// remove self from the info list
-	ArenaInfo *p = infoHead;
-	if (p == info) {
-		infoHead = infoHead->next;
-	} else {
-		while (p->next != info) {
-			p = p->next;
-		}
-		p->next = info->next;
-	}
+/* 	// acquire info mutex */ 
+/* 	pthread_mutex_lock(infoListLock); */
+/* 	// remove self from the info list */
+/* 	ArenaInfo *p = infoHead; */
+/* 	if (p == info) { */
+/* 		infoHead = infoHead->next; */
+/* 	} else { */
+/* 		while (p->next != info) { */
+/* 			p = p->next; */
+/* 		} */
+/* 		p->next = info->next; */
+/* 	} */
 
-		// give sbrk space to other threads if any
-	if (infoHead != NULL) {
-		reclaimResourcesHelper(info, infoHead);
-	} else {
-		// free mmap space
-		MallocHeader *hdr = info->usedListBig;
-		MallocHeader *next;
-		while (hdr != NULL) {
-			next = hdr->next;
-			munmap(hdr, hdr->size);
-			hdr = next;
-		}
-	}
+/* 		// give sbrk space to other threads if any */
+/* 	if (infoHead != NULL) { */
+/* 		reclaimResourcesHelper(info, infoHead); */
+/* 	} else { */
+/* 		// free mmap space */
+/* 		MallocHeader *hdr = info->usedListBig; */
+/* 		MallocHeader *next; */
+/* 		while (hdr != NULL) { */
+/* 			next = hdr->next; */
+/* 			munmap(hdr, hdr->size); */
+/* 			hdr = next; */
+/* 		} */
+/* 	} */
 
-	pthread_mutex_unlock(infoListLock);
-}
+/* 	pthread_mutex_unlock(infoListLock); */
+/* } */
 
 void initArenaInfo() 
 {
@@ -137,7 +137,7 @@ void initArenaInfo()
 	info->pid = getpid();
 	info->tid = pthread_self();	
 	info->numOfBins = NUM_OF_BINS;
-	pthread_mutex_init(&info->infoLock, NULL);
+	/* pthread_mutex_init(&info->infoLock, NULL); */
 	/* info->infoLock = &infoLock; */
 
 	// try to reclaim resources from parent process
@@ -215,7 +215,6 @@ void *getSpace(int b)
 	MallocHeader *hdr = flDequeue(b);
 	if (hdr == NULL) {
 		// first try to reclaim resources from the exited threads/parent process
-		// TODO stop reclaim when required block found
 		reclaimResources(b);
 		hdr = flDequeue(b);
 	}
@@ -265,7 +264,7 @@ int requestSpaceFromHeap(int b)
 	int i;
 	for (i = 0; i < numOfNewNodes; i++) {
 		hdr->size = nodeSize;
-		flEnqueue(info, b, hdr);
+		flEnqueue(b, hdr);
 		/* hdr += nodeSize; */
 		hdr += nodeSize / 16;
 	}
@@ -298,10 +297,11 @@ void free(void *ptr)
 	if (size > MAX_SIZE) {
 		ulDequeue(-1, hdr);
 		munmap((void *)hdr, realSize);
-		info->mmapSpace -= realSize;
+		
+		/* info->mmapSpace -= realSize; */
 	} else {
 		ulDequeue(binInd, hdr);
-		flEnqueue(info, binInd, hdr);
+		flEnqueue(binInd, hdr);
 		info->freeCount[binInd]++;
 		info->sizesOfUL[binInd]--;
 		info->sizesOfFL[binInd]++;
@@ -313,22 +313,22 @@ void free(void *ptr)
 #endif
 }
 
-void flEnqueue(ArenaInfo *ai, int qInd, MallocHeader *newHead)
+void flEnqueue(int qInd, MallocHeader *newHead)
 {
-	pthread_mutex_lock(&ai->infoLock);
-	newHead->next = ai->freeLists[qInd];
-	ai->freeLists[qInd] = newHead;
-	pthread_mutex_unlock(&ai->infoLock);
+	/* pthread_mutex_lock(&ai->infoLock); */
+	newHead->next = info->freeLists[qInd];
+	info->freeLists[qInd] = newHead;
+	/* pthread_mutex_unlock(&ai->infoLock); */
 }
 
 MallocHeader *flDequeue(int qInd)
 {
-	pthread_mutex_lock(&info->infoLock);
+	/* pthread_mutex_lock(&info->infoLock); */
 	MallocHeader *res = info->freeLists[qInd];
 	if (res != NULL) {
 		info->freeLists[qInd] = res->next;
 	}
-	pthread_mutex_unlock(&info->infoLock);
+	/* pthread_mutex_unlock(&info->infoLock); */
 	return res;
 }
 
@@ -410,20 +410,22 @@ int reclaimResources(int b)
 {
 	// TODO set the new head to the ArenaInfo of current thread
 	// TODO remove infoLock
-	info->pid = cPid;
-	info->tid = pthread_self();
-	info->next = NULL;
+	// If this is a new process, fix the pid and tid
+	pid_t cPid = getpid();
+	if (info->pid != cPid) {
+		info->pid = cPid;
+		info->tid = pthread_self();
+	}
 
 	// need to acquire the mutex before modify the process's info head
 	pthread_mutex_lock(infoListLock);
-	pid_t cPid = getpid();
 	ArenaInfo *p = infoHead;
 	ArenaInfo *next;
 	// find the new infoHead
 	/* while (p != NULL && !isInfoAlive(p)) { */
 	while (!isInfoAlive(p)) {
 		infoHead = p->next;
-		reclaimResourcesHelper(p, info);
+		reclaimResourcesHelper(p);
 		if (info->freeLists[b] != NULL) {
 			pthread_mutex_unlock(infoListLock);
 			return 0;
@@ -436,7 +438,7 @@ int reclaimResources(int b)
 		next = p->next;
 		if (!isInfoAlive(next)) {
 			p->next = next->next;
-			reclaimResourcesHelper(next, info);
+			reclaimResourcesHelper(next);
 			if (info->freeLists[b] != NULL) {
 				pthread_mutex_unlock(infoListLock);
 				return 0;
@@ -459,7 +461,7 @@ int isInfoAlive(ArenaInfo *ai)
 }
 
 
-void reclaimResourcesHelper(ArenaInfo *src, ArenaInfo *dest)
+void reclaimResourcesHelper(ArenaInfo *src)
 {
 	// reclaim memory in BINs
 	MallocHeader *hdr;
@@ -469,20 +471,20 @@ void reclaimResourcesHelper(ArenaInfo *src, ArenaInfo *dest)
 		hdr = src->freeLists[i];
 		while (hdr != NULL) {
 			next = hdr->next;
-			flEnqueue(dest, i, hdr);
+			flEnqueue(i, hdr);
 			hdr = next;
 		}
 		hdr = src->usedLists[i];
 		while (hdr != NULL) {
 			next = hdr->next;
-			flEnqueue(dest, i, hdr);
+			flEnqueue(i, hdr);
 			hdr = next;
 		}
-		pthread_mutex_lock(&dest->infoLock);
-		dest->sizesOfFL[i] += src->sizesOfFL[i];
-		dest->sizesOfFL[i] += src->sizesOfUL[i];
-		dest->totalBlocks[i] += src->totalBlocks[i];
-		pthread_mutex_unlock(&dest->infoLock);
+		/* pthread_mutex_lock(&dest->infoLock); */
+		info->sizesOfFL[i] += src->sizesOfFL[i];
+		info->sizesOfFL[i] += src->sizesOfUL[i];
+		info->totalBlocks[i] += src->totalBlocks[i];
+		/* pthread_mutex_unlock(&dest->infoLock); */
 	}
 	// reclaim big memory block
 	hdr = src->usedListBig;
@@ -493,9 +495,9 @@ void reclaimResourcesHelper(ArenaInfo *src, ArenaInfo *dest)
 	}
 		
 	// summing the total resources allocated
-	pthread_mutex_lock(&dest->infoLock);
-	dest->sbrkSpace += src->sbrkSpace;
-	pthread_mutex_unlock(&dest->infoLock);
+	/* pthread_mutex_lock(&dest->infoLock); */
+	info->sbrkSpace += src->sbrkSpace;
+	/* pthread_mutex_unlock(&dest->infoLock); */
 }
 			
 void *realloc(void *ptr, size_t size)
