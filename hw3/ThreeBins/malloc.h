@@ -24,7 +24,8 @@ typedef struct ArenaInfo
 	size_t sbrkSpace;
 	size_t mmapSpace;
 	struct ArenaInfo *next;
-	int init;
+	pthread_mutex_t infoLock;
+	/* int init; */
 	pid_t pid;
 	pthread_t tid;
 } ArenaInfo;
