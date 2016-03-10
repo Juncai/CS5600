@@ -86,7 +86,7 @@ static void flEnqueue(ArenaInfo *ai, int qInd, MallocHeader *newHead)
 static int isInfoAlive(ArenaInfo *ai)
 {
 	pid_t cPid = getpid();
-	if (ai->pid != cPid) return 0;
+	if (ai->pid != cPid || ai->tid == 0) return 0;
 	int ret = pthread_kill(ai->tid, 0);
 	if (ret == ESRCH) return 0;
 	return 1;
@@ -263,6 +263,17 @@ void initArenaInfo()
 
 	// need to acquire the mutex before modify the process's info head
 	pthread_mutex_lock(centralLock);
+	// HACK: loop through all the existing thread arenas,
+	//       replace the same tid with NULL
+	ArenaInfo *p = centralArena.next;
+	while(p != NULL) {
+		if (pthread_equal(info->tid, p->tid)) {
+		/* if (info->tid == p->tid) { */
+			p->tid = 0;
+		}
+		p = p->next;
+	}
+	reclaimResources();
 
 	// add current arena to the central arena
 	info->next = centralArena.next;
@@ -427,7 +438,7 @@ int ulDequeue(int qInd, MallocHeader *hdrToRemove)
 
 void malloc_stats()
 {
-	ArenaInfo *p = &centralArena;
+	ArenaInfo *p = centralArena.next;
 	int ind = 0;
 	while (p != NULL) {
 		printf("Arena %d:\n", ind++);

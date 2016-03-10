@@ -33,6 +33,7 @@
 #define RANDOM(s)	(rng() % (s))
 
 #define MSIZE		10000
+/* #define MSIZE		512 */	
 #define I_MAX		10000
 #define ACTIONS_MAX	30
 
