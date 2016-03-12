@@ -1,3 +1,4 @@
+/* Author: Jun Cai */
 #include "malloc.h"
 #include <assert.h>
 #include <stdio.h>
@@ -19,7 +20,6 @@
 static const size_t MIN_SIZE = 8;
 static const size_t MAX_SIZE = 512;
 static const int PAGES_REQUESTED = 128;
-/* static struct ArenaInfo *infoHead = NULL; */
 static struct ArenaInfo centralArena;
 static int centralInitiated = 0;
 static size_t BIN_SIZES[NUM_OF_BINS] = {8, 64, 512};
@@ -28,7 +28,6 @@ static int BLOCKS_REQUESTED[NUM_OF_BINS] = {682, 204, 31};
 static pthread_once_t once_control = PTHREAD_ONCE_INIT;
 static pthread_mutex_t *centralLock;
 static pthread_mutex_t *sbrkLock;
-/* __thread pthread_mutex_t infoLock = PTHREAD_MUTEX_INITIALIZER; */
 __thread ArenaInfo *info;
 
 int sizeToBinNo(size_t s);
@@ -116,7 +115,6 @@ static void reclaimResourcesHelper(ArenaInfo *src)
 			centralArena.freeLists[i] = src->usedLists[i];
 			centralArena.sizesOfFL[i] += src->sizesOfUL[i];
 		}
-
 		centralArena.totalBlocks[i] += src->totalBlocks[i];
 	}
 
@@ -241,12 +239,8 @@ int requestSpaceFromCentral(int b)
 
 void initArenaInfo() 
 {
-	/* if (info == centralArena.next) { */
-	/* 	return; */
-	/* } */
 	// request some space from the heap for arena info, then initialize
 	pthread_mutex_lock(sbrkLock);
-	/* info = (ArenaInfo *) sbrk((intptr_t) sysconf(_SC_PAGESIZE)); */
 	info = (ArenaInfo *) sbrk((intptr_t) sizeof(ArenaInfo));
 	pthread_mutex_unlock(sbrkLock);
 	memset(info, 0, sizeof(ArenaInfo));
@@ -268,7 +262,6 @@ void initArenaInfo()
 	ArenaInfo *p = centralArena.next;
 	while(p != NULL) {
 		if (pthread_equal(info->tid, p->tid)) {
-		/* if (info->tid == p->tid) { */
 			p->tid = 0;
 		}
 		p = p->next;
@@ -280,17 +273,17 @@ void initArenaInfo()
 	centralArena.next = info;
 
 	pthread_mutex_unlock(centralLock);
-	/* info->init = 1; */
 }
 
 void *malloc(size_t size)
 {
 	// add arena info for the current thread to the process info queue
 	pthread_once(&once_control, &init);
-	/* if (info->init == 0) { */
 	if (info == NULL) {
 		initArenaInfo();
 	}
+
+	if (size == 0) return NULL;
 
 	void *sPtr = NULL;
 	size_t realSize = size + sizeof(MallocHeader);
@@ -352,7 +345,6 @@ void free(void *ptr)
 {
 	// add arena info for the current thread to the process info queue
 	pthread_once(&once_control, &init);
-	/* if (info->init == 0) { */
 	if (info == NULL) {
 		initArenaInfo();
 	}
@@ -368,7 +360,6 @@ void free(void *ptr)
 	if (size > MAX_SIZE) {
 		ulDequeue(-1, hdr);
 		munmap((void *)hdr, realSize);
-		/* info.mmapSpace -= realSize; */
 	} else {
 		ulDequeue(binInd, hdr);
 		flEnqueue(info, binInd, hdr);
@@ -406,20 +397,17 @@ void ulEnqueue(int qInd, MallocHeader *newHead)
 
 int ulDequeue(int qInd, MallocHeader *hdrToRemove)
 {
-	/* pthread_mutex_lock(&info.infoLock); */
 	MallocHeader *h;
 	if (qInd == -1) { // for big space
 		h = info->usedListBig;
 		if (h == hdrToRemove) {
 			info->usedListBig = hdrToRemove->next;
-			/* pthread_mutex_unlock(&info.infoLock); */
 			return 0;
 		}
 	} else {
 		h = info->usedLists[qInd];
 		if (h == hdrToRemove) {
 			info->usedLists[qInd] = hdrToRemove->next;
-			/* pthread_mutex_unlock(&info.infoLock); */
 			return 0;
 		}
 	}
@@ -472,7 +460,6 @@ void *realloc(void *ptr, size_t size)
 {
 	// add arena info for the current thread to the process info queue
 	pthread_once(&once_control, &init);
-	/* if (info->init == 0) { */
 	if (info == NULL) {
 		initArenaInfo();
 	}
@@ -501,7 +488,6 @@ void *calloc(size_t nmemb, size_t size)
 {
 	// add arena info for the current thread to the process info queue
 	pthread_once(&once_control, &init);
-	/* if (info->init == 0) { */
 	if (info == NULL) {
 		initArenaInfo();
 	}
@@ -515,4 +501,9 @@ void *calloc(size_t nmemb, size_t size)
 	void *p = malloc(totalSize);
 	memset(p, 0, totalSize);
 	return p;
+}
+void *memalign(size_t alignment, size_t size)
+{
+	return malloc(size);
+
 }

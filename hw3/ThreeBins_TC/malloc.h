@@ -1,3 +1,4 @@
+/* Author: Jun Cai */
 #include <stdio.h>
 #include <pthread.h>
 #include <sys/types.h>
@@ -36,3 +37,4 @@ void free(void *ptr);
 void malloc_stats();
 void *realloc(void *ptr, size_t size);
 void *calloc(size_t nmemb, size_t size);
+void *memalign(size_t alignment, size_t size);

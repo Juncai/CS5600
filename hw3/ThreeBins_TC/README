@@ -1,0 +1,13 @@
+Author: Jun Cai
+
+Compile the library:
+	make libmalloc.so
+
+Run program with the library:
+	LD_PRELOAD=PATH/TO/LIB/libmalloc.so <PROGRAM>
+
+Run test with the library:
+	Name the test c file as 'test1.c', then run 'make' or 'make check'
+	
+
+
