@@ -17,9 +17,9 @@ typedef struct ArenaInfo
 	struct MallocHeader *freeLists[NUM_OF_BINS];
 	struct MallocHeader *usedLists[NUM_OF_BINS];
 	struct MallocHeader *usedListBig;
-	int totalBlocks[NUM_OF_BINS];
-	int sizesOfFL[NUM_OF_BINS];
-	int sizesOfUL[NUM_OF_BINS];
+	/* int totalBlocks[NUM_OF_BINS]; */
+	/* int sizesOfFL[NUM_OF_BINS]; */
+	/* int sizesOfUL[NUM_OF_BINS]; */
 	int mallocCount[NUM_OF_BINS];
 	int freeCount[NUM_OF_BINS];
 	size_t sbrkSpace;

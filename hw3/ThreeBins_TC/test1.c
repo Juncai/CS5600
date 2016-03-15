@@ -8,12 +8,15 @@
 
 void *workThread(void *tno);
 
+static void *p;
+
 int main(int argc, char **argv)
 {
 	size_t size = 12;
-	void *mem = malloc(size);
-	printf("Successfully malloc'd %zu bytes at addr %p\n", size, mem);
-	assert(mem != NULL);
+	/* void *mem = malloc(size); */
+	p = malloc(size);
+	printf("Successfully malloc'd %zu bytes at addr %p\n", size, p);
+	assert(p != NULL);
 	malloc_stats();
 
 	// create some threads
@@ -29,8 +32,8 @@ int main(int argc, char **argv)
 		}
 		pthread_join(threads[t], &status);
 	}
-	free(mem);
-	printf("Successfully free'd %zu bytes from addr %p\n", size, mem);
+	/* free(mem); */
+	/* printf("Successfully free'd %zu bytes from addr %p\n", size, mem); */
 	malloc_stats();
 
 	return 0;
@@ -72,6 +75,15 @@ void *workThread(void *tno)
 
 	free(mem);
 	printf("Successfully free'd %zu bytes from addr %p\n", size, mem);
+	malloc_stats();
+	// double free the memory
+	free(mem);
+	printf("Successfully double free'd %zu bytes from addr %p\n", size, mem);
+	malloc_stats();
+
+
+	free(p);
+	printf("Successfully free'd %zu bytes from addr %p from the main thread\n", size, p);
 	malloc_stats();
 
 	pthread_exit(NULL);
