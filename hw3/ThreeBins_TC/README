@@ -9,5 +9,12 @@ Run program with the library:
 Run test with the library:
 	Name the test c file as 'test1.c', then run 'make' or 'make check'
 	
+Implementation:
+
+	- This submission implements a simple malloc library. A central arena is hosted per process. For each thread in that process, the library keeps an child arena. Every arena contains three bins holding different sizes of blocks (8-byte, 64-byte and 512-byte). Bins are implemented using linked list. There are lists for tracking both free blocks and used blocks for each bin. The central arena is shared by all the threads. Whenever a thread is calling the malloc library the first time, it pre-allocates four page of memory in each of the bins from the central arena. When a thread's arena run out of memory, it will request some from the central arena. 
+	- The library is thread safe. Mutexes are used for central arena accesses and sbrk calls. 
+	- Resources of ended threads will be reclaimed when central arena run out of space or a new thread is calling the library. 
+	- Cross thread free is supported by traversaling used block list of other threads in the 'free' call. The freed block will go to the current thread's arena.
 
 
+	

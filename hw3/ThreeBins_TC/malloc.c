@@ -106,7 +106,6 @@ static void reclaimResourcesHelper(ArenaInfo *src)
 			}
 			tail->next = centralArena.freeLists[i];
 			centralArena.freeLists[i] = src->freeLists[i];
-			/* centralArena.sizesOfFL[i] += src->sizesOfFL[i]; */
 		}
 		if (src->usedLists[i] != NULL) {
 			tail = src->usedLists[i];
@@ -115,9 +114,7 @@ static void reclaimResourcesHelper(ArenaInfo *src)
 			}
 			tail->next = centralArena.freeLists[i];
 			centralArena.freeLists[i] = src->usedLists[i];
-			/* centralArena.sizesOfFL[i] += src->sizesOfUL[i]; */
 		}
-		/* centralArena.totalBlocks[i] += src->totalBlocks[i]; */
 	}
 
 	// reclaim big memory block
@@ -174,12 +171,9 @@ static int requestSpaceFromHeap(int b)
 	for (i = 0; i < numOfNewNodes; i++) {
 		hdr->size = nodeSize;
 		flEnqueue(&centralArena, b, hdr);
-		/* hdr += nodeSize; */
 		hdr += nodeSize / 16;
 	}
 	centralArena.sbrkSpace += requestSize;
-	/* centralArena.sizesOfFL[b] += numOfNewNodes; */
-	/* centralArena.totalBlocks[b] += numOfNewNodes; */
 #if TEST > 0
 	printf("%d free slots of %zu BYTE are created!\n", numOfNewNodes, nodeSize);
 #endif
@@ -228,13 +222,9 @@ int requestSpaceFromCentral(int b)
 		tail = tail->next;
 	}
 	centralArena.freeLists[b] = tail->next;
-	/* centralArena.sizesOfFL[b] -= BLOCKS_REQUESTED[b]; */
-	/* centralArena.totalBlocks[b] -= BLOCKS_REQUESTED[b]; */
 	pthread_mutex_unlock(centralLock);
 	tail->next = info->freeLists[b];
 	info->freeLists[b] = head;
-	/* info->sizesOfFL[b] += BLOCKS_REQUESTED[b]; */
-	/* info->totalBlocks[b] += BLOCKS_REQUESTED[b]; */
 	info->sbrkSpace += BLOCKS_REQUESTED[b] * BIN_SIZES[b];
 	return 0;
 }
@@ -337,8 +327,6 @@ void *getSpace(int b)
 
 	if (hdr != NULL) {
 		ulEnqueue(b, hdr);
-		/* info->sizesOfFL[b]--; */
-		/* info->sizesOfUL[b]++; */
 	}
 	return hdr;
 }
@@ -368,8 +356,6 @@ void free(void *ptr)
 		ret = ulDequeue(binInd, hdr);
 		if (ret == 0) {
 			flEnqueue(info, binInd, hdr);
-			/* info->sizesOfUL[binInd]--; */
-			/* info->sizesOfFL[binInd]++; */
 		}
 		info->freeCount[binInd]++;
 	}
@@ -419,7 +405,6 @@ int ulDequeue(int qInd, MallocHeader *hdrToRemove)
 		ai = ai->next;
 	}
 	
-	/* pthread_mutex_unlock(&info.infoLock); */
 	return 1;
 }
 
@@ -446,7 +431,6 @@ int ulDequeueHelper(int qInd, MallocHeader *hdrToRemove, ArenaInfo *ai)
 	while (h != NULL) {
 		if (h->next == hdrToRemove) {
 			h->next = hdrToRemove->next;
-			/* pthread_mutex_unlock(&info.infoLock); */
 			pthread_mutex_unlock(centralLock);
 			return 0;
 		}
