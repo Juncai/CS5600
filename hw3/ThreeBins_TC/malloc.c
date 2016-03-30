@@ -1,3 +1,4 @@
+/* Author: Jun Cai */
 #include "malloc.h"
 #include <assert.h>
 #include <stdio.h>
@@ -19,7 +20,6 @@
 static const size_t MIN_SIZE = 8;
 static const size_t MAX_SIZE = 512;
 static const int PAGES_REQUESTED = 128;
-/* static struct ArenaInfo *infoHead = NULL; */
 static struct ArenaInfo centralArena;
 static int centralInitiated = 0;
 static size_t BIN_SIZES[NUM_OF_BINS] = {8, 64, 512};
@@ -28,7 +28,6 @@ static int BLOCKS_REQUESTED[NUM_OF_BINS] = {682, 204, 31};
 static pthread_once_t once_control = PTHREAD_ONCE_INIT;
 static pthread_mutex_t *centralLock;
 static pthread_mutex_t *sbrkLock;
-/* __thread pthread_mutex_t infoLock = PTHREAD_MUTEX_INITIALIZER; */
 __thread ArenaInfo *info;
 
 int sizeToBinNo(size_t s);
@@ -39,6 +38,7 @@ static void flEnqueue(ArenaInfo *ai, int qInd, MallocHeader *newHead);
 MallocHeader *flDequeue(int qInd);
 void ulEnqueue(int qInd, MallocHeader *newHead);
 int ulDequeue(int qInd, MallocHeader *hdrToRemove);
+int ulDequeueHelper(int qInd, MallocHeader *hdrToRemove, ArenaInfo *ai);
 int isInQueue(int qInd, MallocHeader *hdr);
 void initArenaInfo();
 void printInfo(ArenaInfo *ai);
@@ -46,6 +46,7 @@ static void reclaimResources();
 static void reclaimResourcesHelper(ArenaInfo *src);
 static int isInfoAlive(ArenaInfo *ai);
 int requestSpaceFromCentral(int b);
+int listLength(MallocHeader *hdr);
 
 static void prepare()
 {
@@ -98,26 +99,22 @@ static void reclaimResourcesHelper(ArenaInfo *src)
 	MallocHeader *tail;
 	int i;
 	for (i = 0; i < NUM_OF_BINS; i++) {
-		if (src->sizesOfFL[i] > 0) {
+		if (src->freeLists[i] != NULL) {
 			tail = src->freeLists[i];
 			while (tail->next != NULL) {
 				tail = tail->next;
 			}
 			tail->next = centralArena.freeLists[i];
 			centralArena.freeLists[i] = src->freeLists[i];
-			centralArena.sizesOfFL[i] += src->sizesOfFL[i];
 		}
-		if (src->sizesOfUL[i] > 0) {
+		if (src->usedLists[i] != NULL) {
 			tail = src->usedLists[i];
 			while (tail->next != NULL) {
 				tail = tail->next;
 			}
 			tail->next = centralArena.freeLists[i];
 			centralArena.freeLists[i] = src->usedLists[i];
-			centralArena.sizesOfFL[i] += src->sizesOfUL[i];
 		}
-
-		centralArena.totalBlocks[i] += src->totalBlocks[i];
 	}
 
 	// reclaim big memory block
@@ -174,12 +171,9 @@ static int requestSpaceFromHeap(int b)
 	for (i = 0; i < numOfNewNodes; i++) {
 		hdr->size = nodeSize;
 		flEnqueue(&centralArena, b, hdr);
-		/* hdr += nodeSize; */
 		hdr += nodeSize / 16;
 	}
 	centralArena.sbrkSpace += requestSize;
-	centralArena.sizesOfFL[b] += numOfNewNodes;
-	centralArena.totalBlocks[b] += numOfNewNodes;
 #if TEST > 0
 	printf("%d free slots of %zu BYTE are created!\n", numOfNewNodes, nodeSize);
 #endif
@@ -217,7 +211,7 @@ int requestSpaceFromCentral(int b)
 {
 	pthread_mutex_lock(centralLock);
 	int ret = 0;
-	if (centralArena.sizesOfFL[b] < BLOCKS_REQUESTED[b]) {
+	if (listLength(centralArena.freeLists[b]) < BLOCKS_REQUESTED[b]) {
 		ret = requestSpaceFromHeap(b);
 	}
 	if (ret == 1) return ret;
@@ -228,25 +222,17 @@ int requestSpaceFromCentral(int b)
 		tail = tail->next;
 	}
 	centralArena.freeLists[b] = tail->next;
-	centralArena.sizesOfFL[b] -= BLOCKS_REQUESTED[b];
-	centralArena.totalBlocks[b] -= BLOCKS_REQUESTED[b];
 	pthread_mutex_unlock(centralLock);
 	tail->next = info->freeLists[b];
 	info->freeLists[b] = head;
-	info->sizesOfFL[b] += BLOCKS_REQUESTED[b];
-	info->totalBlocks[b] += BLOCKS_REQUESTED[b];
 	info->sbrkSpace += BLOCKS_REQUESTED[b] * BIN_SIZES[b];
 	return 0;
 }
 
 void initArenaInfo() 
 {
-	/* if (info == centralArena.next) { */
-	/* 	return; */
-	/* } */
 	// request some space from the heap for arena info, then initialize
 	pthread_mutex_lock(sbrkLock);
-	/* info = (ArenaInfo *) sbrk((intptr_t) sysconf(_SC_PAGESIZE)); */
 	info = (ArenaInfo *) sbrk((intptr_t) sizeof(ArenaInfo));
 	pthread_mutex_unlock(sbrkLock);
 	memset(info, 0, sizeof(ArenaInfo));
@@ -268,7 +254,6 @@ void initArenaInfo()
 	ArenaInfo *p = centralArena.next;
 	while(p != NULL) {
 		if (pthread_equal(info->tid, p->tid)) {
-		/* if (info->tid == p->tid) { */
 			p->tid = 0;
 		}
 		p = p->next;
@@ -280,17 +265,17 @@ void initArenaInfo()
 	centralArena.next = info;
 
 	pthread_mutex_unlock(centralLock);
-	/* info->init = 1; */
 }
 
 void *malloc(size_t size)
 {
 	// add arena info for the current thread to the process info queue
 	pthread_once(&once_control, &init);
-	/* if (info->init == 0) { */
 	if (info == NULL) {
 		initArenaInfo();
 	}
+
+	if (size == 0) return NULL;
 
 	void *sPtr = NULL;
 	size_t realSize = size + sizeof(MallocHeader);
@@ -342,8 +327,6 @@ void *getSpace(int b)
 
 	if (hdr != NULL) {
 		ulEnqueue(b, hdr);
-		info->sizesOfFL[b]--;
-		info->sizesOfUL[b]++;
 	}
 	return hdr;
 }
@@ -352,7 +335,6 @@ void free(void *ptr)
 {
 	// add arena info for the current thread to the process info queue
 	pthread_once(&once_control, &init);
-	/* if (info->init == 0) { */
 	if (info == NULL) {
 		initArenaInfo();
 	}
@@ -364,17 +346,18 @@ void free(void *ptr)
 	size_t realSize = hdr->size;
 	size_t size = realSize - sizeof(MallocHeader);
 	int binInd = sizeToBinNo(size);
+	int ret;
 
 	if (size > MAX_SIZE) {
 		ulDequeue(-1, hdr);
 		munmap((void *)hdr, realSize);
-		/* info.mmapSpace -= realSize; */
 	} else {
-		ulDequeue(binInd, hdr);
-		flEnqueue(info, binInd, hdr);
+		// handle duplicate free calls
+		ret = ulDequeue(binInd, hdr);
+		if (ret == 0) {
+			flEnqueue(info, binInd, hdr);
+		}
 		info->freeCount[binInd]++;
-		info->sizesOfUL[binInd]--;
-		info->sizesOfFL[binInd]++;
 	}
 
 #if TEST > 0
@@ -395,6 +378,7 @@ MallocHeader *flDequeue(int qInd)
 
 void ulEnqueue(int qInd, MallocHeader *newHead)
 {
+	pthread_mutex_lock(centralLock);
 	if (qInd == -1) { // for big space
 		newHead->next = info->usedListBig;
 		info->usedListBig = newHead;
@@ -402,24 +386,44 @@ void ulEnqueue(int qInd, MallocHeader *newHead)
 		newHead->next = info->usedLists[qInd];
 		info->usedLists[qInd] = newHead;
 	}
+	pthread_mutex_unlock(centralLock);
 }
 
 int ulDequeue(int qInd, MallocHeader *hdrToRemove)
 {
-	/* pthread_mutex_lock(&info.infoLock); */
+	int ret = ulDequeueHelper(qInd, hdrToRemove, info);
+
+	if (ret == 0) return 0;
+
+	// try to free blocks from other thread's arena
+	ArenaInfo *ai = centralArena.next;
+	while (ai != NULL) {
+		if (ai != info) {
+			ret = ulDequeueHelper(qInd, hdrToRemove, ai);
+			if (ret == 0) return 0;
+		}
+		ai = ai->next;
+	}
+	
+	return 1;
+}
+
+int ulDequeueHelper(int qInd, MallocHeader *hdrToRemove, ArenaInfo *ai)
+{
+	pthread_mutex_lock(centralLock);
 	MallocHeader *h;
 	if (qInd == -1) { // for big space
-		h = info->usedListBig;
+		h = ai->usedListBig;
 		if (h == hdrToRemove) {
-			info->usedListBig = hdrToRemove->next;
-			/* pthread_mutex_unlock(&info.infoLock); */
+			ai->usedListBig = hdrToRemove->next;
+			pthread_mutex_unlock(centralLock);
 			return 0;
 		}
 	} else {
-		h = info->usedLists[qInd];
+		h = ai->usedLists[qInd];
 		if (h == hdrToRemove) {
-			info->usedLists[qInd] = hdrToRemove->next;
-			/* pthread_mutex_unlock(&info.infoLock); */
+			ai->usedLists[qInd] = hdrToRemove->next;
+			pthread_mutex_unlock(centralLock);
 			return 0;
 		}
 	}
@@ -427,12 +431,13 @@ int ulDequeue(int qInd, MallocHeader *hdrToRemove)
 	while (h != NULL) {
 		if (h->next == hdrToRemove) {
 			h->next = hdrToRemove->next;
-			/* pthread_mutex_unlock(&info.infoLock); */
+			pthread_mutex_unlock(centralLock);
 			return 0;
 		}
 		h = h->next;
 	}
-	/* pthread_mutex_unlock(&info.infoLock); */
+
+	pthread_mutex_unlock(centralLock);
 	return 1;
 }
 
@@ -457,22 +462,32 @@ void printInfo(ArenaInfo *ai)
 	printf("Total number of bins:        %d\n", ai->numOfBins);
 	int i;
 	for (i = 0; i < ai->numOfBins; i++) {
+		int flLength = listLength(ai->freeLists[i]);
+		int ulLength = listLength(ai->usedLists[i]);
 		printf("------------------------------------------\n");
 		printf("Bin %d with %zu-byte block size: \n", i, BIN_SIZES[i]);
-		printf("Total number of blocks:      %d\n", ai->totalBlocks[i]);
-		printf("Used blocks:                 %d\n", ai->sizesOfUL[i]);
-		printf("Free blocks:                 %d\n", ai->sizesOfFL[i]);
+		printf("Total number of blocks:      %d\n", flLength + ulLength);
+		printf("Used blocks:                 %d\n", ulLength);
+		printf("Free blocks:                 %d\n", flLength);
 		printf("Total allocation requests:   %d\n", ai->mallocCount[i]);
 		printf("Total free requests:         %d\n", ai->freeCount[i]);
 	}
 }
 
+int listLength(MallocHeader *hdr)
+{
+	int c = 0;
+	while (hdr != NULL) {
+		hdr = hdr->next;
+		c++;
+	}
+	return c;
+}
 		
 void *realloc(void *ptr, size_t size)
 {
 	// add arena info for the current thread to the process info queue
 	pthread_once(&once_control, &init);
-	/* if (info->init == 0) { */
 	if (info == NULL) {
 		initArenaInfo();
 	}
@@ -501,7 +516,6 @@ void *calloc(size_t nmemb, size_t size)
 {
 	// add arena info for the current thread to the process info queue
 	pthread_once(&once_control, &init);
-	/* if (info->init == 0) { */
 	if (info == NULL) {
 		initArenaInfo();
 	}
@@ -515,4 +529,10 @@ void *calloc(size_t nmemb, size_t size)
 	void *p = malloc(totalSize);
 	memset(p, 0, totalSize);
 	return p;
+}
+
+void *memalign(size_t alignment, size_t size)
+{
+	return malloc(size);
+
 }

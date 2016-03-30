@@ -1,3 +1,4 @@
+/* Author: Jun Cai */
 #include <stdio.h>
 #include <pthread.h>
 #include <sys/types.h>
@@ -16,9 +17,9 @@ typedef struct ArenaInfo
 	struct MallocHeader *freeLists[NUM_OF_BINS];
 	struct MallocHeader *usedLists[NUM_OF_BINS];
 	struct MallocHeader *usedListBig;
-	int totalBlocks[NUM_OF_BINS];
-	int sizesOfFL[NUM_OF_BINS];
-	int sizesOfUL[NUM_OF_BINS];
+	/* int totalBlocks[NUM_OF_BINS]; */
+	/* int sizesOfFL[NUM_OF_BINS]; */
+	/* int sizesOfUL[NUM_OF_BINS]; */
 	int mallocCount[NUM_OF_BINS];
 	int freeCount[NUM_OF_BINS];
 	size_t sbrkSpace;
@@ -36,3 +37,4 @@ void free(void *ptr);
 void malloc_stats();
 void *realloc(void *ptr, size_t size);
 void *calloc(size_t nmemb, size_t size);
+void *memalign(size_t alignment, size_t size);

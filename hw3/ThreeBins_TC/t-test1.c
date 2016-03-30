@@ -277,17 +277,17 @@ static void bin_alloc(struct bin *m, size_t size, unsigned r)
 #endif
 	r %= 1024;
 
-	/* if (r < 4) */
-	/* { */
-	/* 	/1* memalign *1/ */
-	/* 	if (m->size > 0) free(m->ptr); */
-	/* 	m->ptr = memalign(sizeof(int) << r, size); */
-	/* } */
-	/* else if (r < 20) */
-	if (r < 4) {
-		r = 4;
+	if (r < 4)
+	{
+		/* memalign */
+		if (m->size > 0) free(m->ptr);
+		m->ptr = memalign(sizeof(int) << r, size);
 	}
-	if (r < 20)
+	else if (r < 20)
+	/* if (r < 4) { */
+	/* 	r = 4; */
+	/* } */
+	/* if (r < 20) */
 	{
 		/* calloc */
 		if (m->size > 0) free(m->ptr);
